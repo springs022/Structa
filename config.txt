@@ -1,0 +1,14 @@
+# 問題入力ファイル
+INPUT_FILE  = problem.txt
+
+# 検討結果出力ファイル
+OUTPUT_FILE = result.txt
+
+# 出力モード（0：SIMPLE、1：MEDIUM、2：DETAIL）
+OUTPUT_LEVEL = 1
+
+# 開始局面出力（0：出力しない、1：実戦初形ではないときは出力、2：常に出力）
+ST_POS_OUTPUT_MODE = 1
+
+# 置換表メモリ上限（MB）
+TT_MEMORY_MB = 256

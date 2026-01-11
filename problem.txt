@@ -1,0 +1,18 @@
+# 開始局面（無設定なら実戦初形）
+START_SFEN  = 
+
+# 指定局面
+TARGET_SFEN = lnsgkgs+B1/1r7/ppppppnpp/6p2/9/2P6/PP1PPPPPP/7R1/LNSGKGSNL w LB 1
+
+# 指定手数
+MAX_DEPTH = 7
+
+# 解数上限（1～10）
+LIMIT = 3
+
+# 何手までの手待ちを読むか（0～5）
+MARGIN = 1
+
+# 不動駒（開始局面にある動かない・取られない駒を半角数字2桁の位置で指定）
+# 例 FIXED_PIECES = 13,19
+FIXED_PIECES = 
