@@ -14,9 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import cshogi as cs
-from typing import List
-from typing import Tuple
-from typing import Optional
+from collections import deque
+from typing import Optional, Tuple, Set, List
+from dataclasses import dataclass
 from board_utils import (
     PROM_PIECES,
     c_distance,
@@ -26,10 +26,25 @@ from board_utils import (
     is_promoted,
     piece_owner,
     unpromote,
+    file_rank_str_from_sq,
+    piece_value_to_name
 )
 from movement_rules import (
-    is_reachable_by_one_move
+    can_promote_on_move,
+    is_reachable_by_one_move,
+    can_move_as_bishop,
+    can_move_as_rook,
+    can_move_as_prom_rook,
+    can_move_as_prom_bishop,
+    prom_bishop_attack_sqs
 )
+
+@dataclass(frozen=True)
+class PieceCost:
+    piece: int
+    owner: int
+    make_cost: int
+    move_cost: int
 
 def count_position_diffs(board: cs.Board, target: cs.Board) -> List[int]:
     """
@@ -116,9 +131,96 @@ def minor_p_distance(src_sq: int, dst_sq: int, owner: int) -> int:
     else:
         return m_distance(src_sq, dst_sq)
 
-def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[int]:
+def major_p_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
     """
-    board において、piece（成駒）を dst_sq に設置するのに掛かる最小手数を返す。
+    src_sq にある角・飛・馬・龍（src_piece）が、途中で成ることを許して
+    dst_sq に成駒として到達する最小手数を返す。
+    盤上の他駒は完全に無視し、利きの幾何学だけで判定する。
+    """
+    owner = piece_owner(src_piece)
+    if owner is None:
+        return None
+    base_piece = unpromote(src_piece)
+    if base_piece not in (cs.BBISHOP, cs.WBISHOP, cs.BROOK, cs.WROOK):
+        return None
+    if is_promoted(src_piece) and src_sq == dst_sq:
+        return 0
+    src_file, src_rank = sq_to_file_rank(src_sq)
+    dst_file, dst_rank = sq_to_file_rank(dst_sq)
+    norm_src_rank = src_rank if owner == 0 else 10 - src_rank
+    norm_dst_rank = dst_rank if owner == 0 else 10 - dst_rank
+    df = dst_file - src_file
+    dr = norm_dst_rank - norm_src_rank
+    if src_piece in (cs.BPROM_ROOK, cs.WPROM_ROOK):
+        # 龍→龍
+        if can_move_as_prom_rook(df, dr):
+            return 1
+        else:
+            return 2
+    elif src_piece in (cs.BROOK, cs.WROOK):
+        # 飛→龍
+        if norm_src_rank <= 3 or norm_dst_rank <= 3:
+            if can_move_as_rook(df, dr):
+                return 1
+            else:
+                return 2
+        else:
+            if norm_dst_rank == 4 and abs(df) == 1:
+                # 成って斜めに引く
+                return 2
+            elif df == 0:
+                # 真っすぐ引く
+                return 2
+            else:
+                return 3
+    elif src_piece in (cs.BPROM_BISHOP, cs.WBISHOP):
+        # 馬→馬
+        if can_move_as_prom_bishop(df, dr):
+            return 1
+        elif (df + dr) % 2 == 0:
+            return 2
+        else:
+            return 3
+    else:
+        # 角→馬
+        if norm_src_rank <= 3 or norm_dst_rank <= 3:
+            if can_move_as_bishop(df, dr):
+                return 1
+            elif (df + dr) % 2 == 0:
+                return 2
+            else:
+                return 3
+        else:
+            # 1．src_sq にある角の利きのうち、1～3段目のマスを色で塗る。
+            # 2．dst_sq に馬があるとして、馬の利きを別の色で塗る。
+            # 3．１と２の両方で塗られたマスが存在すれば、２手。存在しないなら以下。
+            # 4．(df + dr) % 2 == 0 なら３手。そうでないなら４手。
+            promotable_sqs = set()
+            for df0, dr0 in ((1,1), (1,-1), (-1,1), (-1,-1)):
+                f = src_file + df0
+                r = src_rank + dr0
+                while 1 <= f <= 9 and 1 <= r <= 9:
+                    norm_r = r if owner == 0 else 10 - r
+                    if 1 <= norm_r <= 3:
+                        promotable_sqs.add(file_rank_to_sq(f, r))
+                    f += df0
+                    r += dr0
+            horse_attack = prom_bishop_attack_sqs(dst_sq)
+            if promotable_sqs & horse_attack:
+                return 2
+            if (df + dr) % 2 == 0:
+                return 3
+            else:
+                return 4
+
+def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
+    """
+    board において、piece（成駒）を dst_sq に設置するのに掛かる
+    最小手数の組（駒打ちから成駒を作る場合, 既存成駒の移動の場合）を返す。
     """
     if not is_promoted(piece):
         return None
@@ -126,7 +228,7 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[int]:
     if owner is None:
         return None
     if board.piece(dst_sq) == piece:
-        return 0
+        return 0, 0
     if piece not in PROM_PIECES:
         return None
     base_piece = unpromote(piece)
@@ -172,18 +274,18 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[int]:
             continue
         # 大駒
         if piece in (cs.BPROM_BISHOP, cs.WPROM_BISHOP, cs.BPROM_ROOK, cs.WPROM_ROOK):
-            if is_reachable_by_one_move(board, sq, dst_sq, p):
-                move_cost = min(move_cost, 1)
-            else:
-                move_cost = min(move_cost, 2) # 概算
+            cost = major_p_cost(board, piece, sq, dst_sq)
+            print("major_p_cost が呼び出された")
+            if cost is not None:
+                move_cost = min(move_cost, cost)
             continue
         # 小駒
         if is_promoted(p):
-            #成駒の移動
             move_cost = min(move_cost, minor_p_distance(sq, dst_sq, owner))
             continue
-        # 小駒成駒を作って移動
         waypoint_rank = get_waypoint_rank_for(piece)
+        if waypoint_rank is None:
+            continue
         waypoint = file_rank_to_sq(dst_file, waypoint_rank)
         if not is_reachable_by_one_move(board, sq, waypoint, piece):
             continue
@@ -194,17 +296,20 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[int]:
             cs.BPROM_SILVER, cs.WPROM_SILVER
         ):
             make_cost = min(make_cost, base_make_cost - 1)
-    return min(move_cost, make_cost)
+    return make_cost, move_cost
 
-def need_moves_count(start_board: cs.Board, target_board: cs.Board) -> Tuple[int, int]:
+def need_moves_count(
+    start_board: cs.Board,
+    target_board: cs.Board
+) -> Tuple[List[PieceCost], List[PieceCost]]:
     """
     target_board に配置されているが start_board に配置されていない駒たちについて、
-    各駒に関する最小手数の和を先後それぞれ返す。
-    返り値: (先手の必要手数, 後手の必要手数)
+    各駒ごとのコスト情報を先後別に返す。
     """
-    cost_s = 0
-    cost_g = 0
+    result = [[], []]  # 0:先手, 1:後手
+
     bk_cost, wk_cost = kings_required_moves(start_board, target_board)
+    k_cost = [bk_cost, wk_cost]
 
     for sq in range(81):
         p = target_board.piece(sq)
@@ -214,24 +319,36 @@ def need_moves_count(start_board: cs.Board, target_board: cs.Board) -> Tuple[int
         if start_board.piece(sq) == p:
             continue
         # --- 玉 ---
-        if p == cs.BKING:
-            cost_s += bk_cost
-            continue
-        elif p == cs.WKING:
-            cost_g += wk_cost
+        if p in (cs.BKING, cs.WKING):
+            pc = PieceCost(
+                piece=p,
+                owner=owner,
+                make_cost=100,
+                move_cost=k_cost[owner],
+            )
+            result[owner].append(pc)
             continue
         # --- 成駒 ---
-        elif is_promoted(p):
-            if owner == 0:
-                cost_s += prom_cost(start_board, p, sq)
-            else:
-                cost_g += prom_cost(start_board, p, sq)
+        if is_promoted(p):
+            res = prom_cost(start_board, p, sq)
+            if res is None:
+                continue
+            make_cost, move_cost = res
+            pc = PieceCost(
+                piece=p,
+                owner=owner,
+                make_cost=make_cost,
+                move_cost=move_cost,
+            )
+            result[owner].append(pc)
             continue
         # --- 生駒 ---
-        else:
-            if owner == 0:
-                cost_s += 1
-            else:
-                cost_g += 1
-    return cost_s, cost_g
-
+        # 生駒は「打つ」=1、「動かす」は今回は考えない
+        pc = PieceCost(
+            piece=p,
+            owner=owner,
+            make_cost=1,
+            move_cost=100,
+        )
+        result[owner].append(pc)
+    return result[0], result[1]

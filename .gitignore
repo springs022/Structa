@@ -1,4 +1,6 @@
 result.txt
 test*.py
+test/
+.vscode/
 __pycache__/
 *.pyc

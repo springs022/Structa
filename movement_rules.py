@@ -82,6 +82,35 @@ def can_move_as_bishop(df: int, dr: int) -> bool:
 def can_move_as_rook(df: int, dr: int) -> bool:
     return (df == 0) ^ (dr == 0)
 
+def can_move_as_prom_bishop(df: int, dr: int) -> bool:
+    return can_move_as_bishop(df, dr) ^  can_move_as_gold(0, df, dr)
+
+def can_move_as_prom_rook(df: int, dr: int) -> bool:
+    return can_move_as_rook(df, dr) ^  can_move_as_silver(0, df, dr)
+
+def prom_bishop_attack_sqs(sq: int) -> set[int]:
+    """
+    sq に馬があるときの利きを返す。
+    （盤上の他駒・遮断は一切考慮しない）
+    """
+    file, rank = sq_to_file_rank(sq)
+    reachable = set()
+    # 縦横1マス
+    for df, dr in ((1,0), (-1,0), (0,1), (0,-1)):
+        f = file + df
+        r = rank + dr
+        if 1 <= f <= 9 and 1 <= r <= 9:
+            reachable.add(file_rank_to_sq(f, r))
+    # 斜め
+    for df, dr in ((1,1), (1,-1), (-1,1), (-1,-1)):
+        f = file + df
+        r = rank + dr
+        while 1 <= f <= 9 and 1 <= r <= 9:
+            reachable.add(file_rank_to_sq(f, r))
+            f += df
+            r += dr
+    return reachable
+
 def pieces_reachable_by_one_move(board: cs.Board, piece: int, dst_sq: int) -> list[int]:
     """
     駒の利きだけを考えたとき、dst_sq に 1手で到達可能な piece の存在マス一覧を返す。
