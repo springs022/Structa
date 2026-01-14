@@ -41,6 +41,7 @@ from movement_rules import (
 class PieceCost:
     piece: int
     owner: int
+    sq: int
     make_cost: int
     move_cost: int
 
@@ -345,6 +346,7 @@ def need_moves_count(
             pc = PieceCost(
                 piece=p,
                 owner=owner,
+                sq=sq,
                 make_cost=100,
                 move_cost=k_cost[owner],
             )
@@ -359,6 +361,7 @@ def need_moves_count(
             pc = PieceCost(
                 piece=p,
                 owner=owner,
+                sq=sq,
                 make_cost=make_cost,
                 move_cost=move_cost,
             )
@@ -369,6 +372,7 @@ def need_moves_count(
         pc = PieceCost(
             piece=p,
             owner=owner,
+            sq=sq,
             make_cost=1,
             move_cost=100,
         )
