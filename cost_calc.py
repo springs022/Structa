@@ -26,17 +26,15 @@ from board_utils import (
     is_promoted,
     piece_owner,
     unpromote,
-    file_rank_str_from_sq,
-    piece_value_to_name
+    in_prom_zone
 )
 from movement_rules import (
-    can_promote_on_move,
     is_reachable_by_one_move,
     can_move_as_bishop,
     can_move_as_rook,
     can_move_as_prom_rook,
     can_move_as_prom_bishop,
-    prom_bishop_attack_sqs
+    bishop_attack_sqs
 )
 
 @dataclass(frozen=True)
@@ -137,9 +135,8 @@ def major_p_cost(
     dst_sq: int
 ) -> Optional[int]:
     """
-    src_sq にある角・飛・馬・龍（src_piece）が、途中で成ることを許して
+    src_sq にある角・飛・馬・龍（src_piece）が
     dst_sq に成駒として到達する最小手数を返す。
-    盤上の他駒は完全に無視し、利きの幾何学だけで判定する。
     """
     owner = piece_owner(src_piece)
     if owner is None:
@@ -177,11 +174,12 @@ def major_p_cost(
                 return 2
             else:
                 return 3
-    elif src_piece in (cs.BPROM_BISHOP, cs.WBISHOP):
+    elif src_piece in (cs.BPROM_BISHOP, cs.WPROM_BISHOP):
         # 馬→馬
         if can_move_as_prom_bishop(df, dr):
             return 1
-        elif (df + dr) % 2 == 0:
+        elif ((df + dr) % 2 == 0) or (can_move_as_bishop(df, dr + 1)) or (can_move_as_bishop(df, dr - 1)):
+            # 角の動き２回／上下左右１回＋角の動き１回
             return 2
         else:
             return 3
@@ -190,32 +188,57 @@ def major_p_cost(
         if norm_src_rank <= 3 or norm_dst_rank <= 3:
             if can_move_as_bishop(df, dr):
                 return 1
-            elif (df + dr) % 2 == 0:
+            elif ((df + dr) % 2 == 0) or (can_move_as_bishop(df, dr + 1)) or (can_move_as_bishop(df, dr - 1)):
                 return 2
             else:
                 return 3
-        else:
-            # 1．src_sq にある角の利きのうち、1～3段目のマスを色で塗る。
-            # 2．dst_sq に馬があるとして、馬の利きを別の色で塗る。
-            # 3．１と２の両方で塗られたマスが存在すれば、２手。存在しないなら以下。
-            # 4．(df + dr) % 2 == 0 なら３手。そうでないなら４手。
-            promotable_sqs = set()
-            for df0, dr0 in ((1,1), (1,-1), (-1,1), (-1,-1)):
-                f = src_file + df0
-                r = src_rank + dr0
-                while 1 <= f <= 9 and 1 <= r <= 9:
+        else: # 出発マスも到着マスも可成地域ではない場合
+            promotable_sqs = set() # 角が1手で到達できる可成地域
+            attacked_sqs_by_b = bishop_attack_sqs(src_sq)
+            for sq in attacked_sqs_by_b:
+                f, r = sq_to_file_rank(sq)
+                if in_prom_zone(owner, r):
+                    promotable_sqs.add(sq)
+            if not promotable_sqs:
+                #成るのに２手掛かる場合
+                for sq in attacked_sqs_by_b:
+                    attacked_sqs2 = bishop_attack_sqs(sq)
+                    for sq in attacked_sqs2:
+                        f, r = sq_to_file_rank(sq)
+                        if in_prom_zone(owner, r):
+                            promotable_sqs.add(sq)
+                cost = 100
+                for sq in promotable_sqs:
+                    f, r = sq_to_file_rank(sq)
                     norm_r = r if owner == 0 else 10 - r
-                    if 1 <= norm_r <= 3:
-                        promotable_sqs.add(file_rank_to_sq(f, r))
-                    f += df0
-                    r += dr0
-            horse_attack = prom_bishop_attack_sqs(dst_sq)
-            if promotable_sqs & horse_attack:
-                return 2
-            if (df + dr) % 2 == 0:
-                return 3
+                    df1 = dst_file - f
+                    dr1 = norm_dst_rank - norm_r
+                    if can_move_as_prom_bishop(df1, dr1):
+                        tmp = 3
+                    elif ((df1 + dr1) % 2 == 0) or (can_move_as_bishop(df1, dr1 + 1)) or (can_move_as_bishop(df1, dr1 - 1)):
+                        # 角の動き２回／上下左右１回＋角の動き１回
+                        tmp = 4
+                    else:
+                        tmp = 5
+                    cost = min(cost, tmp)
+                return cost
             else:
-                return 4
+                #１手で成れる
+                cost = 100
+                for sq in promotable_sqs:
+                    f, r = sq_to_file_rank(sq)
+                    norm_r = r if owner == 0 else 10 - r
+                    df1 = dst_file - f
+                    dr1 = norm_dst_rank - norm_r
+                    if can_move_as_prom_bishop(df1, dr1):
+                        tmp = 2
+                    elif ((df1 + dr1) % 2 == 0) or (can_move_as_bishop(df1, dr1 + 1)) or (can_move_as_bishop(df1, dr1 - 1)):
+                        # 角の動き２回／上下左右１回＋角の動き１回
+                        tmp = 3
+                    else:
+                        tmp = 4
+                    cost = min(cost, tmp)
+                return cost
 
 def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
     """
@@ -274,8 +297,7 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
             continue
         # 大駒
         if piece in (cs.BPROM_BISHOP, cs.WPROM_BISHOP, cs.BPROM_ROOK, cs.WPROM_ROOK):
-            cost = major_p_cost(board, piece, sq, dst_sq)
-            print("major_p_cost が呼び出された")
+            cost = major_p_cost(p, sq, dst_sq)
             if cost is not None:
                 move_cost = min(move_cost, cost)
             continue

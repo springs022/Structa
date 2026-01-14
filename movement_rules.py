@@ -88,10 +88,25 @@ def can_move_as_prom_bishop(df: int, dr: int) -> bool:
 def can_move_as_prom_rook(df: int, dr: int) -> bool:
     return can_move_as_rook(df, dr) ^  can_move_as_silver(0, df, dr)
 
+def bishop_attack_sqs(sq: int) -> set[int]:
+    """
+    sq に角があるときの利きを返す。
+    """
+    file, rank = sq_to_file_rank(sq)
+    reachable = set()
+    # 斜め
+    for df, dr in ((1,1), (1,-1), (-1,1), (-1,-1)):
+        f = file + df
+        r = rank + dr
+        while 1 <= f <= 9 and 1 <= r <= 9:
+            reachable.add(file_rank_to_sq(f, r))
+            f += df
+            r += dr
+    return reachable
+
 def prom_bishop_attack_sqs(sq: int) -> set[int]:
     """
     sq に馬があるときの利きを返す。
-    （盤上の他駒・遮断は一切考慮しない）
     """
     file, rank = sq_to_file_rank(sq)
     reachable = set()
