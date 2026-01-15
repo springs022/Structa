@@ -136,6 +136,14 @@ def unpromote(piece: int) -> int:
         return piece - 8
     return piece
 
+def change_owner(piece: int) -> Optional[int]:
+    if piece in (cs.NONE, cs.NOTUSE):
+        return None
+    if piece <= 16:
+        return piece + 16
+    else:
+        return piece - 16
+
 def in_prom_zone(owner: int, rank: int) -> bool:
     if owner == 0:
         return rank <= 3

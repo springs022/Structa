@@ -26,7 +26,8 @@ from board_utils import (
     is_promoted,
     piece_owner,
     unpromote,
-    in_prom_zone
+    in_prom_zone,
+    change_owner
 )
 from movement_rules import (
     is_reachable_by_one_move,
@@ -129,6 +130,87 @@ def minor_p_distance(src_sq: int, dst_sq: int, owner: int) -> int:
         return c_distance(src_sq, dst_sq)
     else:
         return m_distance(src_sq, dst_sq)
+
+def unprom_move_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
+    """
+    src_sq にある生駒（src_piece）が dst_sq に生駒のまま到達する最小手数を返す。
+    到達不可の場合は100を返す。
+    """
+    owner = piece_owner(src_piece)
+    if owner is None:
+        return None
+    if is_promoted(src_piece):
+        return None
+    if src_piece in (cs.BKING, cs.WKING):
+        return None
+    if src_sq == dst_sq:
+        return 0
+    
+    # 最初に先後を確認し、後手なら先手の駒に置き換える
+    if owner == cs.BLACK:
+        src_file, src_rank = sq_to_file_rank(src_sq)
+        dst_file, dst_rank = sq_to_file_rank(dst_sq)
+        piece = src_piece
+    else:
+        tmp_src_file, tmp_src_rank = sq_to_file_rank(src_sq)
+        tmp_dst_file, tmp_dst_rank = sq_to_file_rank(dst_sq)
+        src_file = 10 - tmp_src_file
+        src_rank = 10 - tmp_src_rank
+        dst_file = 10 - tmp_dst_file
+        dst_rank = 10 - tmp_dst_rank
+        owner = cs.BLACK
+        piece = change_owner(src_piece)
+    df = dst_file - src_file
+    dr = dst_rank - src_rank
+    n_src_sq = file_rank_to_sq(src_file, src_rank)
+    n_dst_sq = file_rank_to_sq(dst_file, dst_rank)
+
+    # --- 飛 ---
+    if piece == cs.BROOK:
+        if can_move_as_rook(df, dr):
+            return 1
+        return 2
+    # --- 角 ---
+    if piece == cs.BBISHOP:
+        if can_move_as_bishop(df, dr):
+            return 1
+        if (df + dr) % 2 == 0:
+            return 2
+        return 100
+    # --- 金 ---
+    if piece == cs.BGOLD:
+        return minor_p_distance(n_src_sq, n_dst_sq, owner)
+    # --- 銀 ---
+    if piece == cs.BSILVER:
+        if dr < 0 and abs(dr) >= abs(df):
+            return minor_p_distance(n_src_sq, n_dst_sq, owner)
+        if (df + dr) % 2 == 0:
+            return max(abs(dr), abs(df))
+        return max(abs(dr) + 1, abs(df)) + 1
+    # --- 桂 ---
+    if piece == cs.BKNIGHT:
+        if abs(df) == 1 and dr == -2:
+            return 1
+        if abs(df) in (0, 2) and dr == -4:
+            return 2
+        if abs(df) in (1, 3) and dr == -6:
+            return 3
+        return 100
+    # --- 香 ---
+    if piece == cs.BLANCE:
+        if df == 0 and dr < 0:
+            return 1
+        return 100
+    # --- 歩 ---
+    if piece == cs.BPAWN:
+        if df == 0 and dr < 0:
+            return -dr
+        return 100
+    return 100
 
 def major_p_cost(
     src_piece: int,
