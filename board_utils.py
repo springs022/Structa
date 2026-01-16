@@ -144,6 +144,17 @@ def change_owner(piece: int) -> Optional[int]:
     else:
         return piece - 16
 
+def normalize(owner, piece, sq):
+    """
+    owner が後手なら、先手相当の piece と file、rank を返す。
+    """
+    file, rank = sq_to_file_rank(sq)
+    if owner != cs.BLACK:
+        file = 10 - file
+        rank = 10 - rank
+        piece = change_owner(piece)
+    return piece, file, rank
+
 def in_prom_zone(owner: int, rank: int) -> bool:
     if owner == 0:
         return rank <= 3

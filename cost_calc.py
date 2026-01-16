@@ -27,7 +27,9 @@ from board_utils import (
     piece_owner,
     unpromote,
     in_prom_zone,
-    change_owner
+    change_owner,
+    normalize,
+    file_rank_str_from_sq
 )
 from movement_rules import (
     is_reachable_by_one_move,
@@ -146,24 +148,13 @@ def unprom_move_cost(
     if is_promoted(src_piece):
         return None
     if src_piece in (cs.BKING, cs.WKING):
-        return None
+        return c_distance(src_sq, dst_sq)
     if src_sq == dst_sq:
         return 0
     
-    # 最初に先後を確認し、後手なら先手の駒に置き換える
-    if owner == cs.BLACK:
-        src_file, src_rank = sq_to_file_rank(src_sq)
-        dst_file, dst_rank = sq_to_file_rank(dst_sq)
-        piece = src_piece
-    else:
-        tmp_src_file, tmp_src_rank = sq_to_file_rank(src_sq)
-        tmp_dst_file, tmp_dst_rank = sq_to_file_rank(dst_sq)
-        src_file = 10 - tmp_src_file
-        src_rank = 10 - tmp_src_rank
-        dst_file = 10 - tmp_dst_file
-        dst_rank = 10 - tmp_dst_rank
-        owner = cs.BLACK
-        piece = change_owner(src_piece)
+    # 後手の駒なら先手視点にする
+    piece, src_file, src_rank = normalize(owner, src_piece, src_sq)
+    _, dst_file, dst_rank = normalize(owner, piece, dst_sq)
     df = dst_file - src_file
     dr = dst_rank - src_rank
     n_src_sq = file_rank_to_sq(src_file, src_rank)
@@ -183,11 +174,11 @@ def unprom_move_cost(
         return 100
     # --- 金 ---
     if piece == cs.BGOLD:
-        return minor_p_distance(n_src_sq, n_dst_sq, owner)
+        return minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK)
     # --- 銀 ---
     if piece == cs.BSILVER:
         if dr < 0 and abs(dr) >= abs(df):
-            return minor_p_distance(n_src_sq, n_dst_sq, owner)
+            return minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK)
         if (df + dr) % 2 == 0:
             return max(abs(dr), abs(df))
         return max(abs(dr) + 1, abs(df)) + 1
@@ -211,6 +202,88 @@ def unprom_move_cost(
             return -dr
         return 100
     return 100
+
+def minor_p_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
+    """
+    src_sq にある銀、桂、香、歩（src_piece）が
+    dst_sq に成駒として到達する最小手数を返す。
+    """
+    owner = piece_owner(src_piece)
+    if owner is None:
+        return None
+    # 後手の駒なら先手視点にする
+    piece, src_file, src_rank = normalize(owner, src_piece, src_sq)
+    _, dst_file, dst_rank = normalize(owner, piece, dst_sq)
+    if unpromote(piece) not in (cs.BSILVER, cs.BKNIGHT, cs.BLANCE, cs.PAWN):
+        return None
+    df = dst_file - src_file
+    dr = dst_rank - src_rank
+    n_src_sq = file_rank_to_sq(src_file, src_rank)
+    n_dst_sq = file_rank_to_sq(dst_file, dst_rank)
+    is_src_in_prom = in_prom_zone(cs.BLACK, src_rank)
+    is_dst_in_prom = in_prom_zone(cs.BLACK, dst_rank)
+    if is_promoted(piece):
+        return minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK)
+    move_cost = 100
+    # --- 香・歩 ---
+    if piece in (cs.BLANCE, cs.BPAWN):
+        if src_rank == 1:
+            return move_cost
+        if is_src_in_prom:
+            waypoint = file_rank_to_sq(src_file, src_rank - 1)
+        else:
+            waypoint = file_rank_to_sq(src_file, 3)
+        move_cost = unprom_move_cost(piece, n_src_sq, waypoint) + minor_p_distance(waypoint, n_dst_sq, cs.BLACK)
+    # --- 桂 ---
+    if piece == cs.BKNIGHT:
+        if src_rank in (1, 2):
+            return move_cost
+        f = src_file
+        r = src_rank
+        first = True
+        while r >= 3:
+            if not first and r <= 3:
+                break
+            cand_file1 = f - 1
+            cand_file2 = f + 1
+            if abs(cand_file1 - dst_file) > abs(cand_file2 - dst_file):
+                f = cand_file2
+            else:
+                f = cand_file1
+            r -= 2
+            first = False
+        waypoint = file_rank_to_sq(f, r)
+        print(f"waypoint={file_rank_str_from_sq(waypoint)}、n_dst={file_rank_str_from_sq(n_dst_sq)}、minor_p_distance={minor_p_distance(waypoint, n_dst_sq, cs.BLACK)}")
+        move_cost = unprom_move_cost(piece, n_src_sq, waypoint) + minor_p_distance(waypoint, n_dst_sq, cs.BLACK)
+    # --- 銀 ---
+    if piece == cs.BSILVER:
+        if is_src_in_prom:
+            if dr <= 0:
+                corr = 0
+            else:
+                # 引きの移動が何回有効か
+                corr = min(abs(dr), abs(df), 4 - src_rank)
+            move_cost = minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK) - corr
+        else:
+            if is_dst_in_prom:
+                move_cost = minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK)
+            else:
+                # 3段目に到達するまで指してもn_dst_sqの筋に到達していないなら、1回引き成りが効く
+                tmp = src_rank - 3
+                if abs(df) <= tmp:
+                    move_cost = tmp + dst_rank - 3
+                else:
+                    if df < 0:
+                        w_file = src_file - tmp
+                    else:
+                        w_file = src_file + tmp
+                    waypoint = file_rank_to_sq(w_file, 3)
+                    move_cost = tmp + minor_p_distance(waypoint, n_dst_sq, cs.BLACK) - 1
+    return move_cost
 
 def major_p_cost(
     src_piece: int,
@@ -335,8 +408,6 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
         return None
     if board.piece(dst_sq) == piece:
         return 0, 0
-    if piece not in PROM_PIECES:
-        return None
     base_piece = unpromote(piece)
     candidates = {piece, base_piece}
     dst_file, dst_rank = sq_to_file_rank(dst_sq)
@@ -403,6 +474,30 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
             make_cost = min(make_cost, base_make_cost - 1)
     return make_cost, move_cost
 
+def unprom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
+    """
+    board において、piece（生駒）を dst_sq に設置するのに掛かる
+    最小手数の組（駒打ちで実現する場合, 既存生駒の移動の場合）を返す。
+    """
+    if is_promoted(piece):
+        return None
+    owner = piece_owner(piece)
+    if owner is None:
+        return None
+    if board.piece(dst_sq) == piece:
+        return 0, 0
+    make_cost = 1
+    move_cost = 100
+    if piece in (cs.BKING, cs.WKING):
+        make_cost = 100
+    for sq in range(81):
+        p = board.piece(sq)
+        if p != piece:
+            continue
+        cost = unprom_move_cost(p, sq, dst_sq)
+        move_cost = min(move_cost, cost)
+    return make_cost, move_cost
+
 def need_moves_count(
     start_board: cs.Board,
     target_board: cs.Board
@@ -412,9 +507,7 @@ def need_moves_count(
     各駒ごとのコスト情報を先後別に返す。
     """
     result = [[], []]  # 0:先手, 1:後手
-
     bk_cost, wk_cost = kings_required_moves(start_board, target_board)
-    k_cost = [bk_cost, wk_cost]
 
     for sq in range(81):
         p = target_board.piece(sq)
@@ -423,40 +516,20 @@ def need_moves_count(
             continue
         if start_board.piece(sq) == p:
             continue
-        # --- 玉 ---
-        if p in (cs.BKING, cs.WKING):
-            pc = PieceCost(
-                piece=p,
-                owner=owner,
-                sq=sq,
-                make_cost=100,
-                move_cost=k_cost[owner],
-            )
-            result[owner].append(pc)
-            continue
-        # --- 成駒 ---
         if is_promoted(p):
             res = prom_cost(start_board, p, sq)
-            if res is None:
-                continue
-            make_cost, move_cost = res
-            pc = PieceCost(
-                piece=p,
-                owner=owner,
-                sq=sq,
-                make_cost=make_cost,
-                move_cost=move_cost,
-            )
-            result[owner].append(pc)
+        else:
+            res = unprom_cost(start_board, p, sq)
+        if res is None:
             continue
-        # --- 生駒 ---
-        # 生駒は「打つ」=1、「動かす」は今回は考えない
+        make_cost, move_cost = res
         pc = PieceCost(
             piece=p,
             owner=owner,
             sq=sq,
-            make_cost=1,
-            move_cost=100,
+            make_cost=make_cost,
+            move_cost=move_cost,
         )
         result[owner].append(pc)
+
     return result[0], result[1]
