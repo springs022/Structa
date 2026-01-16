@@ -18,7 +18,6 @@ from collections import deque
 from typing import Optional, Tuple, Set, List
 from dataclasses import dataclass
 from board_utils import (
-    PROM_PIECES,
     c_distance,
     m_distance,
     sq_to_file_rank,
@@ -27,12 +26,9 @@ from board_utils import (
     piece_owner,
     unpromote,
     in_prom_zone,
-    change_owner,
     normalize,
-    file_rank_str_from_sq
 )
 from movement_rules import (
-    is_reachable_by_one_move,
     can_move_as_bishop,
     can_move_as_rook,
     can_move_as_prom_rook,
@@ -488,7 +484,6 @@ def need_moves_count(
     各駒ごとのコスト情報を先後別に返す。
     """
     result = [[], []]  # 0:先手, 1:後手
-    bk_cost, wk_cost = kings_required_moves(start_board, target_board)
 
     for sq in range(81):
         p = target_board.piece(sq)
