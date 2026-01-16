@@ -507,5 +507,15 @@ def need_moves_count(
             move_cost=move_cost,
         )
         result[owner].append(pc)
-
     return result[0], result[1]
+
+def corrected_need_moves_count(
+    start_board: cs.Board,
+    target_board: cs.Board,
+    avail_s: int,
+    avail_g: int
+) -> Tuple[int, int]:
+    piece_costs_s, piece_costs_g = need_moves_count(start_board, target_board)
+    s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
+    g_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_g)
+    return s_cost, g_cost

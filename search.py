@@ -28,14 +28,12 @@ from validation import (
     is_move_touching_fixed_piece
 )
 from board_utils import (
-    count_total_hand_num,
     get_boards_hash_from_usi,
     m_distance_vec
 )
 from cost_calc import (
     available_moves_for_side,
-    count_position_diffs,
-    need_moves_count
+    corrected_need_moves_count
 )
 
 ####################
@@ -189,7 +187,7 @@ def find_all_paths_to_target(start_board: cs.Board,
         # 盤上手数計算
         avail_s = available_moves_for_side(remain_child, board.turn, 0)
         avail_g = available_moves_for_side(remain_child, board.turn, 1)
-        need_s, need_g = need_moves_count(board, target_board)
+        need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g)
         if need_s > avail_s or need_g > avail_g:
             ### DEBUG ###
             if len(h_sols) > 0:
