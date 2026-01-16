@@ -37,6 +37,7 @@ from movement_rules import (
     can_move_as_rook,
     can_move_as_prom_rook,
     can_move_as_prom_bishop,
+    can_move_as_lance,
     bishop_attack_sqs
 )
 
@@ -229,8 +230,8 @@ def minor_p_cost(
     if is_promoted(piece):
         return minor_p_distance(n_src_sq, n_dst_sq, cs.BLACK)
     move_cost = 100
-    # --- 香・歩 ---
-    if piece in (cs.BLANCE, cs.BPAWN):
+    # --- 歩 ---
+    if piece == cs.BPAWN:
         if src_rank == 1:
             return move_cost
         if is_src_in_prom:
@@ -238,6 +239,18 @@ def minor_p_cost(
         else:
             waypoint = file_rank_to_sq(src_file, 3)
         move_cost = unprom_move_cost(piece, n_src_sq, waypoint) + minor_p_distance(waypoint, n_dst_sq, cs.BLACK)
+    # --- 香 ---
+    if piece == cs.BLANCE:
+        if src_rank == 1:
+            return move_cost
+        if is_dst_in_prom and can_move_as_lance(cs.BLACK, df, dr):
+            move_cost = 1
+        else:
+            if is_src_in_prom:
+                waypoint = file_rank_to_sq(src_file, src_rank - 1)
+            else:
+                waypoint = file_rank_to_sq(src_file, 3)
+            move_cost = unprom_move_cost(piece, n_src_sq, waypoint) + minor_p_distance(waypoint, n_dst_sq, cs.BLACK)
     # --- 桂 ---
     if piece == cs.BKNIGHT:
         if src_rank in (1, 2):
@@ -257,7 +270,6 @@ def minor_p_cost(
             r -= 2
             first = False
         waypoint = file_rank_to_sq(f, r)
-        print(f"waypoint={file_rank_str_from_sq(waypoint)}、n_dst={file_rank_str_from_sq(n_dst_sq)}、minor_p_distance={minor_p_distance(waypoint, n_dst_sq, cs.BLACK)}")
         move_cost = unprom_move_cost(piece, n_src_sq, waypoint) + minor_p_distance(waypoint, n_dst_sq, cs.BLACK)
     # --- 銀 ---
     if piece == cs.BSILVER:
@@ -399,7 +411,7 @@ def major_p_cost(
 def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
     """
     board において、piece（成駒）を dst_sq に設置するのに掛かる
-    最小手数の組（駒打ちから成駒を作る場合, 既存成駒の移動の場合）を返す。
+    最小手数の組（駒打ちから成駒を作る場合, 盤上駒の移動の場合）を返す。
     """
     if not is_promoted(piece):
         return None
@@ -410,7 +422,7 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
         return 0, 0
     base_piece = unpromote(piece)
     candidates = {piece, base_piece}
-    dst_file, dst_rank = sq_to_file_rank(dst_sq)
+    _, dst_rank = sq_to_file_rank(dst_sq)
     norm_rank = dst_rank if owner == 0 else 10 - dst_rank
     move_cost = 100
     if piece in (
@@ -418,32 +430,14 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
         cs.BPROM_LANCE, cs.WPROM_LANCE,
         cs.BPROM_KNIGHT, cs.WPROM_KNIGHT
     ):
-        base_make_cost = max(2, norm_rank - 1)
+        make_cost = max(2, norm_rank - 1)
     elif piece in (
         cs.BPROM_SILVER, cs.WPROM_SILVER
     ):
-        base_make_cost = max(2, norm_rank - 2)
+        make_cost = max(2, norm_rank - 2)
     else:
-        base_make_cost = 2
-    make_cost = base_make_cost
-
-    def get_waypoint_rank_for(piece: int) -> Optional[int]:
-        if piece in (
-            cs.BPROM_PAWN, cs.WPROM_PAWN,
-            cs.BPROM_LANCE, cs.WPROM_LANCE,
-            cs.BPROM_KNIGHT, cs.WPROM_KNIGHT
-        ):
-            if norm_rank <= 3:
-                return dst_rank
-            return 3 if owner == 0 else 7
-        if piece in (
-            cs.BPROM_SILVER, cs.WPROM_SILVER
-        ):
-            if norm_rank <= 3:
-                return dst_rank
-            return 4 if owner == 0 else 6
-        else:
-            return None
+        # 龍・馬は持駒を打って作るなら必ず２手
+        make_cost = 2
 
     for sq in range(81):
         p = board.piece(sq)
@@ -456,22 +450,9 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
                 move_cost = min(move_cost, cost)
             continue
         # 小駒
-        if is_promoted(p):
-            move_cost = min(move_cost, minor_p_distance(sq, dst_sq, owner))
-            continue
-        waypoint_rank = get_waypoint_rank_for(piece)
-        if waypoint_rank is None:
-            continue
-        waypoint = file_rank_to_sq(dst_file, waypoint_rank)
-        if not is_reachable_by_one_move(board, sq, waypoint, piece):
-            continue
-        if piece in (
-            cs.BPROM_PAWN, cs.WPROM_PAWN,
-            cs.BPROM_LANCE, cs.WPROM_LANCE,
-            cs.BPROM_KNIGHT, cs.WPROM_KNIGHT,
-            cs.BPROM_SILVER, cs.WPROM_SILVER
-        ):
-            make_cost = min(make_cost, base_make_cost - 1)
+        cost = minor_p_cost(p, sq, dst_sq)
+        if cost is not None:
+            move_cost = min(move_cost, cost)
     return make_cost, move_cost
 
 def unprom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
