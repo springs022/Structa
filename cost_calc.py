@@ -28,7 +28,6 @@ from board_utils import (
     in_prom_zone,
     normalize,
     normalize_piece,
-    piece_value_to_name
 )
 from movement_rules import (
     can_move_as_bishop,
@@ -662,14 +661,6 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
-        # [DEBUG]
-        print("後手の再計算（1回目）")
-        if takeable_pieces:
-            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
-            print("  takeable_pieces:", ", ".join(names))
-        else:
-            print("  takeable_pieces: (none)")
-        # [DEBUG]
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -687,14 +678,6 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
-        # [DEBUG]
-        print("先手の再計算")
-        if takeable_pieces:
-            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
-            print("  takeable_pieces:", ", ".join(names))
-        else:
-            print("  takeable_pieces: (none)")
-        # [DEBUG]
         new_s_cost = 0
         for pc in piece_costs_s:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -712,14 +695,6 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
-        # [DEBUG]
-        print("後手の再計算（2回目）")
-        if takeable_pieces:
-            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
-            print("  takeable_pieces:", ", ".join(names))
-        else:
-            print("  takeable_pieces: (none)")
-        # [DEBUG]
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -727,7 +702,7 @@ def corrected_need_moves_count(
             else:
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
-    # 二歩の考慮 ----
+    # 二歩の考慮
     s_cost += nifu_penalty_for_side(cs.BLACK, piece_costs_s, start_board, protected_sqs)
     g_cost += nifu_penalty_for_side(cs.WHITE, piece_costs_g, start_board, protected_sqs)
     return s_cost, g_cost
