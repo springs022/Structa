@@ -83,10 +83,10 @@ def can_move_as_rook(df: int, dr: int) -> bool:
     return (df == 0) ^ (dr == 0)
 
 def can_move_as_prom_bishop(df: int, dr: int) -> bool:
-    return can_move_as_bishop(df, dr) ^  can_move_as_gold(0, df, dr)
+    return can_move_as_bishop(df, dr) or  can_move_as_gold(0, df, dr)
 
 def can_move_as_prom_rook(df: int, dr: int) -> bool:
-    return can_move_as_rook(df, dr) ^  can_move_as_silver(0, df, dr)
+    return can_move_as_rook(df, dr) or  can_move_as_silver(0, df, dr)
 
 def bishop_attack_sqs(sq: int) -> set[int]:
     """

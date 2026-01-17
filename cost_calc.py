@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import cshogi as cs
-from collections import deque
+from collections import defaultdict
 from typing import Optional, Tuple, Set, List
 from dataclasses import dataclass
 from board_utils import (
@@ -451,6 +451,56 @@ def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, i
             move_cost = min(move_cost, cost)
     return make_cost, move_cost
 
+def prom_cost_w_pos(
+    board: cs.Board,
+    piece: int,
+    dst_sq: int,
+    piece_positions: dict[int, list[int]]
+) -> Optional[Tuple[int, int]]:
+    """
+    board において、piece（成駒）を dst_sq に設置するのに掛かる
+    最小手数の組（駒打ちから成駒を作る場合, 盤上駒の移動の場合）を返す。
+    """
+    if not is_promoted(piece):
+        return None
+    owner = piece_owner(piece)
+    if owner is None:
+        return None
+    if board.piece(dst_sq) == piece:
+        return 0, 0
+    base_piece = unpromote(piece)
+    candidates = {piece, base_piece}
+    _, dst_rank = sq_to_file_rank(dst_sq)
+    norm_rank = dst_rank if owner == 0 else 10 - dst_rank
+    move_cost = 100
+    if piece in (
+        cs.BPROM_PAWN, cs.WPROM_PAWN,
+        cs.BPROM_LANCE, cs.WPROM_LANCE,
+        cs.BPROM_KNIGHT, cs.WPROM_KNIGHT
+    ):
+        make_cost = max(2, norm_rank - 1)
+    elif piece in (
+        cs.BPROM_SILVER, cs.WPROM_SILVER
+    ):
+        make_cost = max(2, norm_rank - 2)
+    else:
+        # 龍・馬は持駒を打って作るなら必ず２手
+        make_cost = 2
+    
+    for p in candidates:
+        for sq in piece_positions.get(p, ()):
+            # 大駒
+            if piece in (cs.BPROM_BISHOP, cs.WPROM_BISHOP, cs.BPROM_ROOK, cs.WPROM_ROOK):
+                cost = major_p_cost(p, sq, dst_sq)
+                if cost is not None:
+                    move_cost = min(move_cost, cost)
+                continue
+            # 小駒
+            cost = minor_p_cost(p, sq, dst_sq)
+            if cost is not None:
+                move_cost = min(move_cost, cost)
+    return make_cost, move_cost
+
 def unprom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
     """
     board において、piece（生駒）を dst_sq に設置するのに掛かる
@@ -475,6 +525,47 @@ def unprom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int,
         move_cost = min(move_cost, cost)
     return make_cost, move_cost
 
+def unprom_cost_w_pos(
+    board: cs.Board,
+    piece: int,
+    dst_sq: int,
+    piece_positions: dict[int, list[int]]
+) -> Optional[Tuple[int, int]]:
+    """
+    board において、piece（生駒）を dst_sq に設置するのに掛かる
+    最小手数の組（駒打ちで実現する場合, 既存生駒の移動の場合）を返す。
+    """
+    if is_promoted(piece):
+        return None
+    owner = piece_owner(piece)
+    if owner is None:
+        return None
+    if board.piece(dst_sq) == piece:
+        return 0, 0
+    make_cost = 1
+    if piece in (cs.BKING, cs.WKING):
+        make_cost = 100
+    move_cost = 100
+    for sq in piece_positions.get(piece, ()):
+        cost = unprom_move_cost(piece, sq, dst_sq)
+        if cost < move_cost:
+            move_cost = cost
+    return make_cost, move_cost
+
+def build_piece_positions(board: cs.Board) -> dict[int, list[int]]:
+    """
+    盤上駒の位置辞書を返す。
+    例
+      positions[cs.BPAWN] == [54, 63, 72, ...]
+      positions[cs.BROOK] == [10]
+    """
+    positions = defaultdict(list)
+    for sq in range(81):
+        p = board.piece(sq)
+        if p != cs.NONE:
+            positions[p].append(sq)
+    return positions
+
 def need_moves_count(
     start_board: cs.Board,
     target_board: cs.Board
@@ -484,6 +575,7 @@ def need_moves_count(
     各駒ごとのコスト情報を先後別に返す。
     """
     result = [[], []]  # 0:先手, 1:後手
+    piece_positions = build_piece_positions(start_board)
 
     for sq in range(81):
         p = target_board.piece(sq)
@@ -493,9 +585,9 @@ def need_moves_count(
         if start_board.piece(sq) == p:
             continue
         if is_promoted(p):
-            res = prom_cost(start_board, p, sq)
+            res = prom_cost_w_pos(start_board, p, sq, piece_positions)
         else:
-            res = unprom_cost(start_board, p, sq)
+            res = unprom_cost_w_pos(start_board, p, sq, piece_positions)
         if res is None:
             continue
         make_cost, move_cost = res
@@ -518,4 +610,70 @@ def corrected_need_moves_count(
     piece_costs_s, piece_costs_g = need_moves_count(start_board, target_board)
     s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
     g_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_g)
+    piece_positions = build_piece_positions(start_board)
+
+    protected_sqs = {
+        sq for sq in range(81)
+        if start_board.piece(sq) != cs.NONE
+        and start_board.piece(sq) == target_board.piece(sq)
+    }
+
+    # -------------------------
+    # 後手の再計算（1回目）
+    # -------------------------
+    if s_cost == avail_s and g_cost <= avail_g:
+        takeable_pieces = set()
+        for piece, sqs in piece_positions.items():
+            if piece_owner(piece) != cs.BLACK:
+                continue
+            for sq in sqs:
+                if sq not in protected_sqs:
+                    takeable_pieces.add(piece)
+                    break
+        new_g_cost = 0
+        for pc in piece_costs_g:
+            if pc.piece in takeable_pieces:
+                new_g_cost += min(pc.make_cost, pc.move_cost)
+            else:
+                new_g_cost += pc.move_cost
+        g_cost = new_g_cost
+    # -------------------------
+    # 先手の再計算
+    # -------------------------
+    if g_cost == avail_g and s_cost <= avail_s:
+        takeable_pieces = set()
+        for piece, sqs in piece_positions.items():
+            if piece_owner(piece) != cs.WHITE:
+                continue
+            for sq in sqs:
+                if sq not in protected_sqs:
+                    takeable_pieces.add(piece)
+                    break
+        new_s_cost = 0
+        for pc in piece_costs_s:
+            if pc.piece in takeable_pieces:
+                new_s_cost += min(pc.make_cost, pc.move_cost)
+            else:
+                new_s_cost += pc.move_cost
+        s_cost = new_s_cost
+    # -------------------------
+    # 後手の再計算（2回目）
+    # -------------------------
+    if s_cost == avail_s and g_cost <= avail_g:
+        takeable_pieces = set()
+        for piece, sqs in piece_positions.items():
+            if piece_owner(piece) != cs.BLACK:
+                continue
+            for sq in sqs:
+                if sq not in protected_sqs:
+                    takeable_pieces.add(piece)
+                    break
+        new_g_cost = 0
+        for pc in piece_costs_g:
+            if pc.piece in takeable_pieces:
+                new_g_cost += min(pc.make_cost, pc.move_cost)
+            else:
+                new_g_cost += pc.move_cost
+        g_cost = new_g_cost
     return s_cost, g_cost
+
