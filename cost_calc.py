@@ -27,7 +27,8 @@ from board_utils import (
     unpromote,
     in_prom_zone,
     normalize,
-    normalize_piece
+    normalize_piece,
+    piece_value_to_name
 )
 from movement_rules import (
     can_move_as_bishop,
@@ -602,6 +603,38 @@ def need_moves_count(
         result[owner].append(pc)
     return result[0], result[1]
 
+def nifu_penalty_for_side(
+    side: int,
+    piece_costs: list[PieceCost],
+    start_board: cs.Board,
+    protected_sqs: set[int],
+) -> int:
+    """
+    二歩に関する必要追加手数を返す。
+    と金の設置が必要な状況で、すでに同じ筋に目標達成済の歩があれば、少なくとも１手余計に掛かる。これらの総和。
+    """
+    prom_pawn = cs.BPROM_PAWN if side == 0 else cs.WPROM_PAWN
+    pawn = cs.BPAWN if side == 0 else cs.WPAWN
+
+    # 設置が必要な「と金」の筋
+    prom_pawn_files = set()
+    for pc in piece_costs:
+        if pc.piece == prom_pawn:
+            f, _ = sq_to_file_rank(pc.sq)
+            prom_pawn_files.add(f)
+
+    if not prom_pawn_files:
+        return 0
+
+    # 達成済の歩の筋
+    protected_pawn_files = set()
+    for sq in protected_sqs:
+        if start_board.piece(sq) == pawn:
+            f, _ = sq_to_file_rank(sq)
+            protected_pawn_files.add(f)
+
+    return len(prom_pawn_files & protected_pawn_files)
+
 def corrected_need_moves_count(
     start_board: cs.Board,
     target_board: cs.Board,
@@ -629,6 +662,14 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
+        # [DEBUG]
+        print("後手の再計算（1回目）")
+        if takeable_pieces:
+            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
+            print("  takeable_pieces:", ", ".join(names))
+        else:
+            print("  takeable_pieces: (none)")
+        # [DEBUG]
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -646,6 +687,14 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
+        # [DEBUG]
+        print("先手の再計算")
+        if takeable_pieces:
+            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
+            print("  takeable_pieces:", ", ".join(names))
+        else:
+            print("  takeable_pieces: (none)")
+        # [DEBUG]
         new_s_cost = 0
         for pc in piece_costs_s:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -663,6 +712,14 @@ def corrected_need_moves_count(
                 if sq not in protected_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
+        # [DEBUG]
+        print("後手の再計算（2回目）")
+        if takeable_pieces:
+            names = [piece_value_to_name(p) for p in sorted(takeable_pieces)]
+            print("  takeable_pieces:", ", ".join(names))
+        else:
+            print("  takeable_pieces: (none)")
+        # [DEBUG]
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces:
@@ -670,5 +727,8 @@ def corrected_need_moves_count(
             else:
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
+    # 二歩の考慮 ----
+    s_cost += nifu_penalty_for_side(cs.BLACK, piece_costs_s, start_board, protected_sqs)
+    g_cost += nifu_penalty_for_side(cs.WHITE, piece_costs_g, start_board, protected_sqs)
     return s_cost, g_cost
 
