@@ -155,6 +155,16 @@ def normalize(owner, piece, sq):
         piece = change_owner(piece)
     return piece, file, rank
 
+def normalize_piece(piece: int) -> int:
+    """
+    PIECES の値を PIECE_TYPES_WITH_NONE に変換する。
+    """
+    if piece == cs.NONE:
+        return cs.NONE
+    if piece == cs.NOTUSE:
+        return cs.NONE
+    return unpromote(piece % 16)
+
 def in_prom_zone(owner: int, rank: int) -> bool:
     if owner == 0:
         return rank <= 3

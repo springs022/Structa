@@ -27,6 +27,7 @@ from board_utils import (
     unpromote,
     in_prom_zone,
     normalize,
+    normalize_piece
 )
 from movement_rules import (
     can_move_as_bishop,
@@ -618,9 +619,7 @@ def corrected_need_moves_count(
         and start_board.piece(sq) == target_board.piece(sq)
     }
 
-    # -------------------------
     # 後手の再計算（1回目）
-    # -------------------------
     if s_cost == avail_s and g_cost <= avail_g:
         takeable_pieces = set()
         for piece, sqs in piece_positions.items():
@@ -628,18 +627,16 @@ def corrected_need_moves_count(
                 continue
             for sq in sqs:
                 if sq not in protected_sqs:
-                    takeable_pieces.add(piece)
+                    takeable_pieces.add(normalize_piece(piece))
                     break
         new_g_cost = 0
         for pc in piece_costs_g:
-            if pc.piece in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces:
                 new_g_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
-    # -------------------------
     # 先手の再計算
-    # -------------------------
     if g_cost == avail_g and s_cost <= avail_s:
         takeable_pieces = set()
         for piece, sqs in piece_positions.items():
@@ -647,18 +644,16 @@ def corrected_need_moves_count(
                 continue
             for sq in sqs:
                 if sq not in protected_sqs:
-                    takeable_pieces.add(piece)
+                    takeable_pieces.add(normalize_piece(piece))
                     break
         new_s_cost = 0
         for pc in piece_costs_s:
-            if pc.piece in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces:
                 new_s_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_s_cost += pc.move_cost
         s_cost = new_s_cost
-    # -------------------------
     # 後手の再計算（2回目）
-    # -------------------------
     if s_cost == avail_s and g_cost <= avail_g:
         takeable_pieces = set()
         for piece, sqs in piece_positions.items():
@@ -666,11 +661,11 @@ def corrected_need_moves_count(
                 continue
             for sq in sqs:
                 if sq not in protected_sqs:
-                    takeable_pieces.add(piece)
+                    takeable_pieces.add(normalize_piece(piece))
                     break
         new_g_cost = 0
         for pc in piece_costs_g:
-            if pc.piece in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces:
                 new_g_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_g_cost += pc.move_cost
