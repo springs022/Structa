@@ -29,13 +29,13 @@ HAND_PIECE_TO_USI = {
 }
 
 HAND_TO_PIECE = {
-    0: 1,  # 歩
-    1: 2,  # 香
-    2: 3,  # 桂
-    3: 4,  # 銀
-    4: 7,  # 金
-    5: 5,  # 角
-    6: 6,  # 飛
+    cs.HPAWN:   cs.BPAWN,
+    cs.HLANCE:  cs.BLANCE,
+    cs.HKNIGHT: cs.BKNIGHT,
+    cs.HSILVER: cs.BSILVER,
+    cs.HGOLD:   cs.BGOLD,
+    cs.HBISHOP: cs.BBISHOP,
+    cs.HROOK:   cs.BROOK,
 }
 
 PIECE_TO_HAND = {v: k for k, v in HAND_TO_PIECE.items()}

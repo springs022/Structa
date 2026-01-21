@@ -196,7 +196,7 @@ def find_all_paths_to_target(start_board: cs.Board,
                         text = KIF.board_to_bod(board)
                         out(f"手数計算の結果、{i + 1}手目の局面が枝刈りされました。", 1)
                         out(f"need_s：{need_s}、avail_s：{avail_s}", 1)
-                        out(f"need_g：{need_g}、avail_s：{avail_g}", 1)
+                        out(f"need_g：{need_g}、avail_g：{avail_g}", 1)
                         out("", 1)
                         out(text, 1)
                         out("----------", 1)

@@ -28,6 +28,7 @@ from board_utils import (
     in_prom_zone,
     normalize,
     normalize_piece,
+    HAND_TO_PIECE
 )
 from movement_rules import (
     can_move_as_bishop,
@@ -651,6 +652,16 @@ def corrected_need_moves_count(
         and start_board.piece(sq) == target_board.piece(sq)
     }
 
+    hand_s, hand_g = start_board.pieces_in_hand
+    droppable_pieces_s = set()
+    droppable_pieces_g = set()
+    for hand_idx, count in enumerate(hand_s):
+        if count > 0 and hand_idx in HAND_TO_PIECE:
+            droppable_pieces_s.add(HAND_TO_PIECE[hand_idx])
+    for hand_idx, count in enumerate(hand_g):
+        if count > 0 and hand_idx in HAND_TO_PIECE:
+            droppable_pieces_g.add(HAND_TO_PIECE[hand_idx])
+
     # 後手の再計算（1回目）
     if s_cost == avail_s and g_cost <= avail_g:
         takeable_pieces = set()
@@ -663,7 +674,7 @@ def corrected_need_moves_count(
                     break
         new_g_cost = 0
         for pc in piece_costs_g:
-            if normalize_piece(pc.piece) in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
                 new_g_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_g_cost += pc.move_cost
@@ -680,7 +691,7 @@ def corrected_need_moves_count(
                     break
         new_s_cost = 0
         for pc in piece_costs_s:
-            if normalize_piece(pc.piece) in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_s:
                 new_s_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_s_cost += pc.move_cost
@@ -697,7 +708,7 @@ def corrected_need_moves_count(
                     break
         new_g_cost = 0
         for pc in piece_costs_g:
-            if normalize_piece(pc.piece) in takeable_pieces:
+            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
                 new_g_cost += min(pc.make_cost, pc.move_cost)
             else:
                 new_g_cost += pc.move_cost
