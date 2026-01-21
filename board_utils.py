@@ -329,10 +329,6 @@ def are_kings_adjacent(board: cs.Board) -> bool:
     wf, wr = sq_to_file_rank(wk_sq)
     return abs(bf - wf) <= 1 and abs(br - wr) <= 1
 
-import cshogi as cs
-
-import cshogi as cs
-
 def has_nifu(board: cs.Board) -> bool:
     """
     盤面に二歩が発生しているかを返す。
