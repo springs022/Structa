@@ -39,6 +39,8 @@ from movement_rules import (
     bishop_attack_sqs
 )
 
+INF = 1000
+
 @dataclass(frozen=True)
 class PieceCost:
     piece: int
@@ -644,8 +646,9 @@ def corrected_need_moves_count(
     piece_costs_s, piece_costs_g = need_moves_count(start_board, target_board)
     s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
     g_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_g)
+    if s_cost > avail_s or g_cost > avail_g:
+        return INF, INF
     piece_positions = build_piece_positions(start_board)
-
     protected_sqs = {
         sq for sq in range(81)
         if start_board.piece(sq) != cs.NONE
@@ -679,6 +682,8 @@ def corrected_need_moves_count(
             else:
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
+        if g_cost > avail_g:
+            return INF, INF
     # 先手の再計算
     if g_cost == avail_g and s_cost <= avail_s:
         takeable_pieces = set()
@@ -696,6 +701,8 @@ def corrected_need_moves_count(
             else:
                 new_s_cost += pc.move_cost
         s_cost = new_s_cost
+        if s_cost > avail_s:
+            return INF, INF
     # 後手の再計算（2回目）
     if s_cost == avail_s and g_cost <= avail_g:
         takeable_pieces = set()
