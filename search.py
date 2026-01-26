@@ -187,7 +187,7 @@ def find_all_paths_to_target(start_board: cs.Board,
         # 盤上手数計算
         avail_s = available_moves_for_side(remain_child, board.turn, 0)
         avail_g = available_moves_for_side(remain_child, board.turn, 1)
-        need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g)
+        need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
         if need_s > avail_s or need_g > avail_g:
             ### DEBUG ###
             if len(h_sols) > 0:

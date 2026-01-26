@@ -641,7 +641,8 @@ def corrected_need_moves_count(
     start_board: cs.Board,
     target_board: cs.Board,
     avail_s: int,
-    avail_g: int
+    avail_g: int,
+    fixed_rfs: set[int]
 ) -> Tuple[int, int]:
     piece_costs_s, piece_costs_g = need_moves_count(start_board, target_board)
     s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
@@ -654,7 +655,7 @@ def corrected_need_moves_count(
         if start_board.piece(sq) != cs.NONE
         and start_board.piece(sq) == target_board.piece(sq)
     }
-
+    untakeable_sqs = protected_sqs | fixed_rfs
     hand_s, hand_g = start_board.pieces_in_hand
     droppable_pieces_s = set()
     droppable_pieces_g = set()
@@ -672,7 +673,7 @@ def corrected_need_moves_count(
             if piece_owner(piece) != cs.BLACK:
                 continue
             for sq in sqs:
-                if sq not in protected_sqs:
+                if sq not in untakeable_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
         new_g_cost = 0
@@ -691,7 +692,7 @@ def corrected_need_moves_count(
             if piece_owner(piece) != cs.WHITE:
                 continue
             for sq in sqs:
-                if sq not in protected_sqs:
+                if sq not in untakeable_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
         new_s_cost = 0
@@ -710,7 +711,7 @@ def corrected_need_moves_count(
             if piece_owner(piece) != cs.BLACK:
                 continue
             for sq in sqs:
-                if sq not in protected_sqs:
+                if sq not in untakeable_sqs:
                     takeable_pieces.add(normalize_piece(piece))
                     break
         new_g_cost = 0
@@ -721,7 +722,7 @@ def corrected_need_moves_count(
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
     # 二歩の考慮
-    s_cost += nifu_penalty_for_side(cs.BLACK, piece_costs_s, start_board, protected_sqs)
-    g_cost += nifu_penalty_for_side(cs.WHITE, piece_costs_g, start_board, protected_sqs)
+    s_cost += nifu_penalty_for_side(cs.BLACK, piece_costs_s, start_board, untakeable_sqs)
+    g_cost += nifu_penalty_for_side(cs.WHITE, piece_costs_g, start_board, untakeable_sqs)
     return s_cost, g_cost
 
