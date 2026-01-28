@@ -236,6 +236,17 @@ if __name__ == "__main__":
         out(f"登録数上限  ：{tt_max_size:,}", 2)
         out(f"メモリ上限  ：{tt_memory_mb:,} MB", 2)
         out(f"ヒット猶予  ：{margin}手", 2)
+        out("---- コスト計算 TT ----", 3)
+        cost_lookups = stats.get("cost_tt_lookups", 0)
+        cost_hits = stats.get("cost_tt_hits", 0)
+        cost_size = stats.get("cost_tt_size", 0)
+        cost_max = stats.get("cost_tt_max_size", 0)
+        hit_rate = (cost_hits / cost_lookups * 100) if cost_lookups else 0.0
+        out(f"参照回数    ：{cost_lookups:,}", 3)
+        out(f"ヒット回数  ：{cost_hits:,}", 3)
+        out(f"ヒット率    ：{hit_rate:.2f} %", 3)
+        out(f"最終サイズ  ：{cost_size:,}", 3)
+        out(f"登録数上限  ：{cost_max:,}", 3)
 
         for idx, sol in enumerate(sols, 1):
             out(f"=== 解 #{idx} ===", 0)

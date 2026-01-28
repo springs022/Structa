@@ -67,6 +67,20 @@ def tt_store(tt: OrderedDict, h: int, remain: int, max_size: int, stats: dict):
         tt.popitem(last=False)
         stats["evictions"] += 1
 
+def cost_tt_get(cost_tt: OrderedDict, h: tuple, stats: dict):
+    stats["lookups"] += 1
+    v = cost_tt.get(h)
+    if v is not None:
+        stats["hits"] += 1
+        cost_tt.move_to_end(h)
+    return v
+
+def cost_tt_store(cost_tt: OrderedDict, h: tuple, v, max_size: int):
+    cost_tt[h] = v
+    cost_tt.move_to_end(h)
+    if len(cost_tt) > max_size:
+        cost_tt.popitem(last=False)
+
 ####################
 # 探索部
 ####################
@@ -90,10 +104,17 @@ def find_all_paths_to_target(start_board: cs.Board,
     board = start_board
     path = []
 
-    # 到達不能置換表
-    TT_ENTRY_SIZE = 200
-    TT_MAX_SIZE = (tt_memory_mb * 1024 * 1024) // TT_ENTRY_SIZE
+    # 到達不能置換表・コスト計算置換表
+    TT_ENTRY_SIZE = 200        # unreachable TT 1エントリ（bytes）
+    TT_ENTRY_SIZE_COST = 200   # cost TT 1エントリ（bytes）
+    COST_TT_RATIO = 0.4
+    TOTAL_TT_BYTES = tt_memory_mb * 1024 * 1024
+    UNREACHABLE_TT_BYTES = int(TOTAL_TT_BYTES * (1.0 - COST_TT_RATIO))
+    COST_TT_BYTES = TOTAL_TT_BYTES - UNREACHABLE_TT_BYTES
+    TT_MAX_SIZE = UNREACHABLE_TT_BYTES // TT_ENTRY_SIZE
+    COST_TT_MAX_SIZE = COST_TT_BYTES // TT_ENTRY_SIZE_COST
     unreachable_tt = OrderedDict()
+    cost_tt = OrderedDict()
 
     # 統計
     total_nodes = 0
@@ -107,6 +128,10 @@ def find_all_paths_to_target(start_board: cs.Board,
         "stores": 0,
         "store_updates": 0,
         "evictions": 0,
+    }
+    cost_tt_stats = {
+        "lookups": 0,
+        "hits": 0,
     }
 
     # DEBUG
@@ -187,7 +212,13 @@ def find_all_paths_to_target(start_board: cs.Board,
         # 盤上手数計算
         avail_s = available_moves_for_side(remain_child, board.turn, 0)
         avail_g = available_moves_for_side(remain_child, board.turn, 1)
-        need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
+        h_cost = (board.zobrist_hash(), avail_s, avail_g)
+        cached = cost_tt_get(cost_tt, h_cost, cost_tt_stats)
+        if cached is not None:
+            need_s, need_g = cached
+        else:
+            need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
+            cost_tt_store(cost_tt, h_cost, (need_s, need_g), COST_TT_MAX_SIZE)
         if need_s > avail_s or need_g > avail_g:
             ### DEBUG ###
             if len(h_sols) > 0:
@@ -239,6 +270,10 @@ def find_all_paths_to_target(start_board: cs.Board,
         "tt_evictions": tt_stats["evictions"],
         "tt_size": len(unreachable_tt),
         "tt_max_size": TT_MAX_SIZE,
+        "cost_tt_lookups": cost_tt_stats["lookups"],
+        "cost_tt_hits": cost_tt_stats["hits"],
+        "cost_tt_size": len(cost_tt),
+        "cost_tt_max_size": COST_TT_MAX_SIZE,
     }
 
     return solutions, stats
