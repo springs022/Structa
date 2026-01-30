@@ -143,7 +143,13 @@ def find_all_paths_to_target(start_board: cs.Board,
         out(f"h_solの長さ：{len(h_sols)}", 0, True)
 
     # 初期状態
-    stack.append((0, iter(board.legal_moves), False))
+    first_moves = sorted(
+        list(board.legal_moves),
+        key=lambda mv: cs.move_to_usi(mv)
+    )
+    total_first_moves = len(first_moves)
+    first_move_index = 0
+    stack.append((0, iter(first_moves), False))
 
     while stack:
         depth, it, found_solution = stack[-1]
@@ -183,6 +189,8 @@ def find_all_paths_to_target(start_board: cs.Board,
         except StopIteration:
             depth, it, found_solution = stack[-1]
             stack.pop()
+            if depth == 1:
+                first_move_index += 1
             if not found_solution:
                 tt_store(unreachable_tt, h, remain, TT_MAX_SIZE, tt_stats)
             if path:
@@ -205,7 +213,8 @@ def find_all_paths_to_target(start_board: cs.Board,
         # 進捗
         if total_nodes % 200000 == 0:
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            out(f"\r[{now}] {total_nodes:,} ノード探索済（検出解数：{len(solutions)}）", 1, True, False, True)
+            percent = int(first_move_index / total_first_moves * 100)
+            out(f"\r[{now}] {total_nodes:,} ノード探索済（{percent}%） 検出解数：{len(solutions)}", 1, True, False, True)
 
         remain_child = max_depth - (depth + 1)
 
