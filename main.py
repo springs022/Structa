@@ -33,7 +33,8 @@ from io_utils import (
     log_system_info,
     print_solution_kif,
     get_boards_side_by_side,
-    load_debug_sol
+    load_debug_sol,
+    save_resume_file
 )
 from validation import (
     validate_sfen_has_king,
@@ -180,8 +181,19 @@ if __name__ == "__main__":
     try:
         t0 = time.time()
         out("探索中…", 1, True, False)
-        sols, stats = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, debug_usis)
-        out("", 0, True, False)
+        first_move_index = 0 # 再開機能実装時はここを変更する
+        sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, debug_usis)
+        if interrupted:
+            base_path = os.path.splitext(input_file)[0]
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            resume_path = f"{base_path}_resume.json"
+            resume_file = os.path.basename(resume_path)
+            save_resume_file(resume_path, start, target, max_depth, limit, margin, fixed_rfs, completed_first_moves, sols)
+            out("", 0, console=True, file=False)
+            out(f"再開用ファイルを保存しました：{resume_file}", 0, console=True)
+            out("【中断終了】", 0, console=True)
+            out("", 0)
+            raise KeyboardInterrupt
         elapsed = time.time() - t0
 
         out(f"検出解数：{len(sols)}", 0, console=True)
@@ -259,8 +271,7 @@ if __name__ == "__main__":
         print("入力値エラー:", e)
         sys.exit(1)
     except KeyboardInterrupt:
-        out("【中断終了】", 0, console=True)
-        out("", 0)
+        pass
     finally:
         try:
             config.out_fp.close()

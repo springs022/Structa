@@ -13,12 +13,15 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+import json
+import os
 import cshogi as cs
 from cshogi import KIF
 import psutil
 from typing import List
 import unicodedata as uni
-import config 
+import config
+from config import VERSION
 
 def load_kv_file(path: str) -> dict:
     """
@@ -136,3 +139,39 @@ def load_debug_sol(path: str) -> list[str]:
             if in_debug:
                 lines.append(line)
     return lines
+
+def save_resume_file(resume_path: str,
+                     start_board: cs.Board,
+                     target_board: cs.Board,
+                     max_depth: int,
+                     limit: int,
+                     margin: int,
+                     fixed_rfs: set,
+                     completed_first_moves: int,
+                     solutions: list):
+    """
+    再開用ファイルをJSON形式で保存する
+    """
+    solutions_usi = [
+        [cs.move_to_usi(mv) for mv in sol]
+        for sol in solutions
+    ]
+    data = {
+        "version": VERSION,
+        "problem": {
+            "start_sfen": start_board.sfen(),
+            "target_sfen": target_board.sfen(),
+            "max_depth": max_depth,
+            "limit": limit,
+            "margin": margin,
+            "fixed_pieces": sorted(list(fixed_rfs)),
+        },
+        "progress": {
+            "completed_first_moves": completed_first_moves
+        },
+        "solutions": solutions_usi
+    }
+    tmp_path = resume_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, resume_path)

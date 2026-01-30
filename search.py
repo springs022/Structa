@@ -91,6 +91,7 @@ def find_all_paths_to_target(start_board: cs.Board,
                              fixed_rfs: set,
                              tt_memory_mb: int,
                              margin: int,
+                             first_move_index: int,
                              debug_usis: List[str]):
 
     adjust_target_turn(start_board, target_board, max_depth)
@@ -98,6 +99,7 @@ def find_all_paths_to_target(start_board: cs.Board,
 
     target_hash = target_board.zobrist_hash()
     solutions = []
+    interrupted = False
  
     # 探索スタック (depth, iterator, found_solution)
     stack = []
@@ -143,128 +145,131 @@ def find_all_paths_to_target(start_board: cs.Board,
         out(f"h_solの長さ：{len(h_sols)}", 0, True)
 
     # 初期状態
-    first_moves = sorted(
+    first_moves_all = sorted(
         list(board.legal_moves),
         key=lambda mv: cs.move_to_usi(mv)
     )
-    total_first_moves = len(first_moves)
-    first_move_index = 0
+    total_first_moves = len(first_moves_all)
+    first_moves = first_moves_all[first_move_index:]
     stack.append((0, iter(first_moves), False))
 
-    while stack:
-        depth, it, found_solution = stack[-1]
-        remain = max_depth - depth
-
-        # TT 判定
-        h = board.zobrist_hash()
-        if tt_hit(unreachable_tt, h, remain, tt_stats, margin):
-            stack.pop()
-            if path:
-                board.pop()
-                path.pop()
-            continue
-
-        # 終端
-        if depth == max_depth:
-            if h == target_hash:
-                solutions.append(list(path))
-                stack[-1] = (depth, it, True)
-                found_solution = True
-                if len(solutions) >= limit:
-                    break
-            else:
-                tt_store(unreachable_tt, h, 0, TT_MAX_SIZE, tt_stats)
-            stack.pop()
-            if path:
-                board.pop()
-                path.pop()
-            if stack:
-                d, it2, f2 = stack[-1]
-                stack[-1] = (d, it2, f2 or found_solution)
-            continue
-
-        # 次の手
-        try:
-            mv = next(it)
-        except StopIteration:
+    try:
+        while stack:
             depth, it, found_solution = stack[-1]
-            stack.pop()
-            if depth == 1:
-                first_move_index += 1
-            if not found_solution:
-                tt_store(unreachable_tt, h, remain, TT_MAX_SIZE, tt_stats)
-            if path:
+            remain = max_depth - depth
+
+            # TT 判定
+            h = board.zobrist_hash()
+            if tt_hit(unreachable_tt, h, remain, tt_stats, margin):
+                stack.pop()
+                if path:
+                    board.pop()
+                    path.pop()
+                continue
+
+            # 終端
+            if depth == max_depth:
+                if h == target_hash:
+                    solutions.append(list(path))
+                    stack[-1] = (depth, it, True)
+                    found_solution = True
+                    if len(solutions) >= limit:
+                        break
+                else:
+                    tt_store(unreachable_tt, h, 0, TT_MAX_SIZE, tt_stats)
+                stack.pop()
+                if path:
+                    board.pop()
+                    path.pop()
+                if stack:
+                    d, it2, f2 = stack[-1]
+                    stack[-1] = (d, it2, f2 or found_solution)
+                continue
+
+            # 次の手
+            try:
+                mv = next(it)
+            except StopIteration:
+                depth, it, found_solution = stack[-1]
+                stack.pop()
+                if depth == 1:
+                    first_move_index += 1
+                if not found_solution:
+                    tt_store(unreachable_tt, h, remain, TT_MAX_SIZE, tt_stats)
+                if path:
+                    board.pop()
+                    path.pop()
+                if stack:
+                    d, it2, f2 = stack[-1]
+                    stack[-1] = (d, it2, f2 or found_solution)
+                continue
+
+            # 不動駒チェック
+            if is_move_touching_fixed_piece(mv, fixed_rfs):
+                continue
+
+            # 着手
+            board.push(mv)
+            path.append(mv)
+            total_nodes += 1
+
+            # 進捗
+            if total_nodes % 200000 == 0:
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                percent = int(first_move_index / total_first_moves * 100)
+                out(f"\r[{now}] {total_nodes:,} ノード探索済（{percent}%） 検出解数：{len(solutions)}", 1, True, False, True)
+
+            remain_child = max_depth - (depth + 1)
+
+            # 盤上手数計算
+            avail_s = available_moves_for_side(remain_child, board.turn, 0)
+            avail_g = available_moves_for_side(remain_child, board.turn, 1)
+            h_cost = (board.zobrist_hash(), avail_s, avail_g)
+            cached = cost_tt_get(cost_tt, h_cost, cost_tt_stats)
+            if cached is not None:
+                need_s, need_g = cached
+            else:
+                need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
+                cost_tt_store(cost_tt, h_cost, (need_s, need_g), COST_TT_MAX_SIZE)
+            if need_s > avail_s or need_g > avail_g:
+                ### DEBUG ###
+                if len(h_sols) > 0:
+                    for i, h_sol in enumerate(h_sols):
+                        if h == h_sol:
+                            text = KIF.board_to_bod(board)
+                            out(f"手数計算の結果、{i + 1}手目の局面が枝刈りされました。", 1)
+                            out(f"need_s：{need_s}、avail_s：{avail_s}", 1)
+                            out(f"need_g：{need_g}、avail_g：{avail_g}", 1)
+                            out("", 1)
+                            out(text, 1)
+                            out("----------", 1)
+                #############
+                pruned_need_moves += 1
+                pruned_by_depth[depth] += 1
                 board.pop()
                 path.pop()
-            if stack:
-                d, it2, f2 = stack[-1]
-                stack[-1] = (d, it2, f2 or found_solution)
-            continue
+                continue
 
-        # 不動駒チェック
-        if is_move_touching_fixed_piece(mv, fixed_rfs):
-            continue
+            # 持駒チェック
+            need_hand_s = m_distance_vec(board.pieces_in_hand[0], target_board.pieces_in_hand[0])
+            need_hand_g = m_distance_vec(board.pieces_in_hand[1], target_board.pieces_in_hand[1])
+            if need_hand_s > avail_s:
+                pruned_diff_hand_s += 1
+                pruned_by_depth[depth] += 1
+                board.pop()
+                path.pop()
+                continue
+            if need_hand_g > avail_g:
+                pruned_diff_hand_g += 1
+                pruned_by_depth[depth] += 1
+                board.pop()
+                path.pop()
+                continue
 
-        # 着手
-        board.push(mv)
-        path.append(mv)
-        total_nodes += 1
-
-        # 進捗
-        if total_nodes % 200000 == 0:
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            percent = int(first_move_index / total_first_moves * 100)
-            out(f"\r[{now}] {total_nodes:,} ノード探索済（{percent}%） 検出解数：{len(solutions)}", 1, True, False, True)
-
-        remain_child = max_depth - (depth + 1)
-
-        # 盤上手数計算
-        avail_s = available_moves_for_side(remain_child, board.turn, 0)
-        avail_g = available_moves_for_side(remain_child, board.turn, 1)
-        h_cost = (board.zobrist_hash(), avail_s, avail_g)
-        cached = cost_tt_get(cost_tt, h_cost, cost_tt_stats)
-        if cached is not None:
-            need_s, need_g = cached
-        else:
-            need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
-            cost_tt_store(cost_tt, h_cost, (need_s, need_g), COST_TT_MAX_SIZE)
-        if need_s > avail_s or need_g > avail_g:
-            ### DEBUG ###
-            if len(h_sols) > 0:
-                for i, h_sol in enumerate(h_sols):
-                    if h == h_sol:
-                        text = KIF.board_to_bod(board)
-                        out(f"手数計算の結果、{i + 1}手目の局面が枝刈りされました。", 1)
-                        out(f"need_s：{need_s}、avail_s：{avail_s}", 1)
-                        out(f"need_g：{need_g}、avail_g：{avail_g}", 1)
-                        out("", 1)
-                        out(text, 1)
-                        out("----------", 1)
-            #############
-            pruned_need_moves += 1
-            pruned_by_depth[depth] += 1
-            board.pop()
-            path.pop()
-            continue
-
-        # 持駒チェック
-        need_hand_s = m_distance_vec(board.pieces_in_hand[0], target_board.pieces_in_hand[0])
-        need_hand_g = m_distance_vec(board.pieces_in_hand[1], target_board.pieces_in_hand[1])
-        if need_hand_s > avail_s:
-            pruned_diff_hand_s += 1
-            pruned_by_depth[depth] += 1
-            board.pop()
-            path.pop()
-            continue
-        if need_hand_g > avail_g:
-            pruned_diff_hand_g += 1
-            pruned_by_depth[depth] += 1
-            board.pop()
-            path.pop()
-            continue
-
-        # 子ノードへ
-        stack.append((depth + 1, iter(board.legal_moves), False))
+            # 子ノードへ
+            stack.append((depth + 1, iter(board.legal_moves), False))
+    except KeyboardInterrupt:
+        interrupted = True
 
     stats = {
         "total_nodes": total_nodes,
@@ -285,4 +290,4 @@ def find_all_paths_to_target(start_board: cs.Board,
         "cost_tt_max_size": COST_TT_MAX_SIZE,
     }
 
-    return solutions, stats
+    return solutions, stats, first_move_index, interrupted
