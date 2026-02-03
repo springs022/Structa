@@ -19,6 +19,7 @@ import sys
 import os
 import time
 import datetime
+import json
 import argparse
 import faulthandler
 faulthandler.enable()
@@ -179,23 +180,81 @@ if __name__ == "__main__":
 
     # 処理実行
     try:
+        # 再開用ファイルのチェック
+        first_move_index = 0
+        previous_solutions = []
+        base_path = os.path.splitext(input_file)[0]
+        resume_path = f"{base_path}_resume.json"
+        if os.path.exists(resume_path):
+            resume_name = os.path.basename(resume_path)
+            print(f"再開用ファイル「{resume_name}」があります。検討を再開しますか？（Y/N）")
+            ans = input().strip().lower()
+            if ans == "y":
+                with open(resume_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                problem = data.get("problem", {})
+                progress = data.get("progress", {})
+                # 整合性チェック
+                sf_ck = (problem.get("start_sfen") == start_sfen)
+                tf_ck = (problem.get("target_sfen") == target_sfen)
+                md_ck = (problem.get("max_depth") == max_depth)
+                lm_ck = (problem.get("limit") == limit)
+                mg_ck = (problem.get("margin") == margin)
+                fp_ck = (set(problem.get("fixed_pieces", [])) == fixed_rfs)
+                if (sf_ck and tf_ck and md_ck and lm_ck and mg_ck and fp_ck):
+                    first_move_index = progress.get("completed_first_moves", 0)
+                    for sol_usi in data.get("solutions", []):
+                        board_tmp = start.copy()
+                        moves = []
+                        for usi in sol_usi:
+                            mv = board_tmp.move_from_usi(usi)
+                            moves.append(mv)
+                            board_tmp.push(mv)
+                        previous_solutions.append(moves)
+                    if (len(previous_solutions) >= limit):
+                        out("すでに解数上限に到達しています。", 0, console=True)
+                        raise ValueError
+                    out("再開用ファイルを使って検討を再開します。", 0, console=True)
+                else:
+                    out("再開用ファイルの内容が入力ファイルと一致しません。", 0, console=True)
+                    if (not sf_ck):
+                        out("start_sfen 不一致", 0, console=True)
+                    if (not tf_ck):
+                        out("target_sfen 不一致", 0, console=True)
+                    if (not md_ck):
+                        out("max_depth 不一致", 0, console=True)
+                    if (not lm_ck):
+                        out("limit 不一致", 0, console=True)
+                    if (not mg_ck):
+                        out("margin 不一致", 0, console=True)
+                    if (not fp_ck):
+                        out("fixed_pieces 不一致", 0, console=True)
+                    out("", 0)
+                    raise ValueError
+            else:
+                out("最初から検討を行います。", 0, console=True)
+
         t0 = time.time()
         out("探索中…", 1, True, False)
-        first_move_index = 0 # 再開機能実装時はここを変更する
-        sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, debug_usis)
+        sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, previous_solutions, debug_usis)
         if interrupted:
-            base_path = os.path.splitext(input_file)[0]
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            resume_path = f"{base_path}_resume.json"
-            resume_file = os.path.basename(resume_path)
-            save_resume_file(resume_path, start, target, max_depth, limit, margin, fixed_rfs, completed_first_moves, sols)
             out("", 0, console=True, file=False)
-            out(f"再開用ファイルを保存しました：{resume_file}", 0, console=True)
+            print("再開用ファイルを出力しますか？（Y/N）")
+            try:
+                ans = input().strip().lower()
+            except EOFError:
+                ans = "n"
+            if ans == "y":
+                base_path = os.path.splitext(input_file)[0]
+                resume_path = f"{base_path}_resume.json"
+                resume_file = os.path.basename(resume_path)
+                save_resume_file(resume_path, start_sfen, target_sfen, max_depth, limit, margin, fixed_rfs, completed_first_moves, sols)
+                out(f"再開用ファイルを保存しました：{resume_file}", 0, console=True)
             out("【中断終了】", 0, console=True)
             out("", 0)
             raise KeyboardInterrupt
         elapsed = time.time() - t0
-
+        out("", 0, console=True, file=False)
         out(f"検出解数：{len(sols)}", 0, console=True)
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
@@ -269,7 +328,6 @@ if __name__ == "__main__":
         out("", 0, console=True)
     except ValueError as e:
         print("入力値エラー:", e)
-        sys.exit(1)
     except KeyboardInterrupt:
         pass
     finally:

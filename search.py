@@ -92,13 +92,14 @@ def find_all_paths_to_target(start_board: cs.Board,
                              tt_memory_mb: int,
                              margin: int,
                              first_move_index: int,
+                             previous_solutions: List[List[int]],
                              debug_usis: List[str]):
 
     adjust_target_turn(start_board, target_board, max_depth)
     validate_piece_counts(start_board, target_board)
 
     target_hash = target_board.zobrist_hash()
-    solutions = []
+    solutions = list(previous_solutions)
     interrupted = False
  
     # 探索スタック (depth, iterator, found_solution)
@@ -170,7 +171,9 @@ def find_all_paths_to_target(start_board: cs.Board,
             # 終端
             if depth == max_depth:
                 if h == target_hash:
-                    solutions.append(list(path))
+                    new_solution = list(path)
+                    if new_solution not in solutions:
+                        solutions.append(new_solution)
                     stack[-1] = (depth, it, True)
                     found_solution = True
                     if len(solutions) >= limit:
@@ -214,10 +217,10 @@ def find_all_paths_to_target(start_board: cs.Board,
             total_nodes += 1
 
             # 進捗
-            if total_nodes % 200000 == 0:
+            if total_nodes % 100000 == 0:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 percent = int(first_move_index / total_first_moves * 100)
-                out(f"\r[{now}] {total_nodes:,} ノード探索済（{percent}%） 検出解数：{len(solutions)}", 1, True, False, True)
+                out(f"\r[{now}] {percent}% 探索済（検出解数：{len(solutions)}）", 1, True, False, True)
 
             remain_child = max_depth - (depth + 1)
 

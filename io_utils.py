@@ -141,8 +141,8 @@ def load_debug_sol(path: str) -> list[str]:
     return lines
 
 def save_resume_file(resume_path: str,
-                     start_board: cs.Board,
-                     target_board: cs.Board,
+                     start_sfen: str,
+                     target_sfen: str,
                      max_depth: int,
                      limit: int,
                      margin: int,
@@ -159,8 +159,8 @@ def save_resume_file(resume_path: str,
     data = {
         "version": VERSION,
         "problem": {
-            "start_sfen": start_board.sfen(),
-            "target_sfen": target_board.sfen(),
+            "start_sfen": start_sfen,
+            "target_sfen": target_sfen,
             "max_depth": max_depth,
             "limit": limit,
             "margin": margin,

@@ -1,5 +1,7 @@
 result.txt
 test*.py
+*.json
+_*
 test/
 .vscode/
 __pycache__/
