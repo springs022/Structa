@@ -16,7 +16,7 @@
 import sys
 import os
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 output_level = 1
 out_fp = None
 
