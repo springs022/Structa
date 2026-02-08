@@ -155,6 +155,12 @@ def find_all_paths_to_target(start_board: cs.Board,
     stack.append((0, iter(first_moves), False))
 
     try:
+        # 初回進捗表示
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if total_first_moves > 0:
+            percent = int(first_move_index / total_first_moves * 100)
+            out(f"\r[{now}] {percent}% 探索済（検出解数：{len(solutions)}）", 1, True, False, True)
+
         while stack:
             depth, it, found_solution = stack[-1]
             remain = max_depth - depth
@@ -219,8 +225,9 @@ def find_all_paths_to_target(start_board: cs.Board,
             # 進捗
             if total_nodes % 100000 == 0:
                 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                percent = int(first_move_index / total_first_moves * 100)
-                out(f"\r[{now}] {percent}% 探索済（検出解数：{len(solutions)}）", 1, True, False, True)
+                if total_first_moves > 0:
+                    percent = int(first_move_index / total_first_moves * 100)
+                    out(f"\r[{now}] {percent}% 探索済（検出解数：{len(solutions)}）", 1, True, False, True)
 
             remain_child = max_depth - (depth + 1)
 
@@ -271,6 +278,12 @@ def find_all_paths_to_target(start_board: cs.Board,
 
             # 子ノードへ
             stack.append((depth + 1, iter(board.legal_moves), False))
+    
+        # 最終進捗表示
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if total_first_moves > 0:
+            percent = int(first_move_index / total_first_moves * 100)
+            out(f"\r[{now}] {percent}% 探索済（検出解数：{len(solutions)}）", 1, True, False, True)
     except KeyboardInterrupt:
         interrupted = True
 
