@@ -41,6 +41,21 @@ from movement_rules import (
 
 INF = 1000
 
+SQUARE_NB = 81
+PIECE_NB = 31
+MOVE_COST_TABLE_SIZE = PIECE_NB * SQUARE_NB * SQUARE_NB
+_COST_UNKNOWN = -2
+_COST_NONE = -1
+_UNPROM_MOVE_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
+_MINOR_P_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
+_MAJOR_P_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
+
+def _move_cost_table_index(piece: int, src_sq: int, dst_sq: int) -> int:
+    return (piece * SQUARE_NB + src_sq) * SQUARE_NB + dst_sq
+
+def _table_cost(value: int) -> Optional[int]:
+    return None if value == _COST_NONE else value
+
 @dataclass(frozen=True)
 class PieceCost:
     piece: int
@@ -152,7 +167,7 @@ def minor_p_distance(src_sq: int, dst_sq: int, owner: int) -> int:
     else:
         return m_distance(src_sq, dst_sq)
 
-def unprom_move_cost(
+def _unprom_move_cost_uncached(
     src_piece: int,
     src_sq: int,
     dst_sq: int
@@ -222,7 +237,23 @@ def unprom_move_cost(
         return 100
     return 100
 
-def minor_p_cost(
+def unprom_move_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
+    """生駒の最小移動コストを固定長テーブルから返す。"""
+    if not (0 <= src_piece < PIECE_NB and 0 <= src_sq < SQUARE_NB and 0 <= dst_sq < SQUARE_NB):
+        return _unprom_move_cost_uncached(src_piece, src_sq, dst_sq)
+    idx = _move_cost_table_index(src_piece, src_sq, dst_sq)
+    cached = _UNPROM_MOVE_COST_TABLE[idx]
+    if cached != _COST_UNKNOWN:
+        return _table_cost(cached)
+    cost = _unprom_move_cost_uncached(src_piece, src_sq, dst_sq)
+    _UNPROM_MOVE_COST_TABLE[idx] = _COST_NONE if cost is None else cost
+    return cost
+
+def _minor_p_cost_uncached(
     src_piece: int,
     src_sq: int,
     dst_sq: int
@@ -315,7 +346,23 @@ def minor_p_cost(
                     move_cost = tmp + minor_p_distance(waypoint, n_dst_sq, cs.BLACK) - 1
     return move_cost
 
-def major_p_cost(
+def minor_p_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
+    """小駒が成駒で到達する最小コストを固定長テーブルから返す。"""
+    if not (0 <= src_piece < PIECE_NB and 0 <= src_sq < SQUARE_NB and 0 <= dst_sq < SQUARE_NB):
+        return _minor_p_cost_uncached(src_piece, src_sq, dst_sq)
+    idx = _move_cost_table_index(src_piece, src_sq, dst_sq)
+    cached = _MINOR_P_COST_TABLE[idx]
+    if cached != _COST_UNKNOWN:
+        return _table_cost(cached)
+    cost = _minor_p_cost_uncached(src_piece, src_sq, dst_sq)
+    _MINOR_P_COST_TABLE[idx] = _COST_NONE if cost is None else cost
+    return cost
+
+def _major_p_cost_uncached(
     src_piece: int,
     src_sq: int,
     dst_sq: int
@@ -425,6 +472,22 @@ def major_p_cost(
                         tmp = 4
                     cost = min(cost, tmp)
                 return cost
+
+def major_p_cost(
+    src_piece: int,
+    src_sq: int,
+    dst_sq: int
+) -> Optional[int]:
+    """大駒が成駒で到達する最小コストを固定長テーブルから返す。"""
+    if not (0 <= src_piece < PIECE_NB and 0 <= src_sq < SQUARE_NB and 0 <= dst_sq < SQUARE_NB):
+        return _major_p_cost_uncached(src_piece, src_sq, dst_sq)
+    idx = _move_cost_table_index(src_piece, src_sq, dst_sq)
+    cached = _MAJOR_P_COST_TABLE[idx]
+    if cached != _COST_UNKNOWN:
+        return _table_cost(cached)
+    cost = _major_p_cost_uncached(src_piece, src_sq, dst_sq)
+    _MAJOR_P_COST_TABLE[idx] = _COST_NONE if cost is None else cost
+    return cost
 
 def prom_cost(board: cs.Board, piece: int, dst_sq: int) -> Optional[Tuple[int, int]]:
     """
