@@ -49,6 +49,24 @@ class PieceCost:
     make_cost: int
     move_cost: int
 
+@dataclass(frozen=True)
+class TargetRequirement:
+    sq: int
+    piece: int
+    owner: int
+    promoted: bool
+
+@dataclass(frozen=True)
+class TargetInfo:
+    pieces: tuple[int, ...]
+    requirements: tuple[TargetRequirement, ...]
+
+@dataclass
+class BoardAnalysis:
+    pieces: tuple[int, ...]
+    piece_positions: dict[int, list[int]]
+    protected_sqs: set[int]
+
 def count_position_diffs(board: cs.Board, target: cs.Board) -> List[int]:
     """
     board と target の局面差異、持駒の差異を計算する。
@@ -570,25 +588,56 @@ def build_piece_positions(board: cs.Board) -> dict[int, list[int]]:
             positions[p].append(sq)
     return positions
 
+def build_target_info(target_board: cs.Board) -> TargetInfo:
+    """探索中に変化しない目標局面の盤上情報を事前計算する。"""
+    pieces = tuple(target_board.piece(sq) for sq in range(81))
+    requirements = []
+    for sq, piece in enumerate(pieces):
+        owner = piece_owner(piece)
+        if owner in (cs.BLACK, cs.WHITE):
+            requirements.append(
+                TargetRequirement(sq, piece, owner, is_promoted(piece))
+            )
+    return TargetInfo(pieces, tuple(requirements))
+
+def analyze_board(board: cs.Board, target_info: TargetInfo) -> BoardAnalysis:
+    """現在局面を1回走査し、コスト計算で共有する情報を構築する。"""
+    pieces = []
+    positions = defaultdict(list)
+    protected_sqs = set()
+    for sq, target_piece in enumerate(target_info.pieces):
+        piece = board.piece(sq)
+        pieces.append(piece)
+        if piece != cs.NONE:
+            positions[piece].append(sq)
+            if piece == target_piece:
+                protected_sqs.add(sq)
+    return BoardAnalysis(tuple(pieces), positions, protected_sqs)
+
 def need_moves_count(
     start_board: cs.Board,
-    target_board: cs.Board
+    target_board: cs.Board,
+    target_info: Optional[TargetInfo] = None,
+    board_analysis: Optional[BoardAnalysis] = None,
 ) -> Tuple[List[PieceCost], List[PieceCost]]:
     """
     target_board に配置されているが start_board に配置されていない駒たちについて、
     各駒ごとのコスト情報を先後別に返す。
     """
     result = [[], []]  # 0:先手, 1:後手
-    piece_positions = build_piece_positions(start_board)
+    if target_info is None:
+        target_info = build_target_info(target_board)
+    if board_analysis is None:
+        board_analysis = analyze_board(start_board, target_info)
+    piece_positions = board_analysis.piece_positions
 
-    for sq in range(81):
-        p = target_board.piece(sq)
-        owner = piece_owner(p)
-        if owner not in (0, 1):
+    for requirement in target_info.requirements:
+        sq = requirement.sq
+        p = requirement.piece
+        owner = requirement.owner
+        if board_analysis.pieces[sq] == p:
             continue
-        if start_board.piece(sq) == p:
-            continue
-        if is_promoted(p):
+        if requirement.promoted:
             res = prom_cost_w_pos(start_board, p, sq, piece_positions)
         else:
             res = unprom_cost_w_pos(start_board, p, sq, piece_positions)
@@ -610,6 +659,7 @@ def nifu_penalty_for_side(
     piece_costs: list[PieceCost],
     start_board: cs.Board,
     protected_sqs: set[int],
+    board_pieces: Optional[tuple[int, ...]] = None,
 ) -> int:
     """
     二歩に関する必要追加手数を返す。
@@ -631,7 +681,8 @@ def nifu_penalty_for_side(
     # 達成済の歩の筋
     protected_pawn_files = set()
     for sq in protected_sqs:
-        if start_board.piece(sq) == pawn:
+        piece = board_pieces[sq] if board_pieces is not None else start_board.piece(sq)
+        if piece == pawn:
             f, _ = sq_to_file_rank(sq)
             protected_pawn_files.add(f)
 
@@ -642,19 +693,21 @@ def corrected_need_moves_count(
     target_board: cs.Board,
     avail_s: int,
     avail_g: int,
-    fixed_rfs: set[int]
+    fixed_rfs: set[int],
+    target_info: Optional[TargetInfo] = None,
 ) -> Tuple[int, int]:
-    piece_costs_s, piece_costs_g = need_moves_count(start_board, target_board)
+    if target_info is None:
+        target_info = build_target_info(target_board)
+    board_analysis = analyze_board(start_board, target_info)
+    piece_costs_s, piece_costs_g = need_moves_count(
+        start_board, target_board, target_info, board_analysis
+    )
     s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
     g_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_g)
     if s_cost > avail_s or g_cost > avail_g:
         return INF, INF
-    piece_positions = build_piece_positions(start_board)
-    protected_sqs = {
-        sq for sq in range(81)
-        if start_board.piece(sq) != cs.NONE
-        and start_board.piece(sq) == target_board.piece(sq)
-    }
+    piece_positions = board_analysis.piece_positions
+    protected_sqs = board_analysis.protected_sqs
     untakeable_sqs = protected_sqs | fixed_rfs
     hand_s, hand_g = start_board.pieces_in_hand
     droppable_pieces_s = set()
@@ -722,7 +775,11 @@ def corrected_need_moves_count(
                 new_g_cost += pc.move_cost
         g_cost = new_g_cost
     # 二歩の考慮
-    s_cost += nifu_penalty_for_side(cs.BLACK, piece_costs_s, start_board, untakeable_sqs)
-    g_cost += nifu_penalty_for_side(cs.WHITE, piece_costs_g, start_board, untakeable_sqs)
+    s_cost += nifu_penalty_for_side(
+        cs.BLACK, piece_costs_s, start_board, untakeable_sqs, board_analysis.pieces
+    )
+    g_cost += nifu_penalty_for_side(
+        cs.WHITE, piece_costs_g, start_board, untakeable_sqs, board_analysis.pieces
+    )
     return s_cost, g_cost
 

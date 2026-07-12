@@ -33,6 +33,7 @@ from board_utils import (
 )
 from cost_calc import (
     available_moves_for_side,
+    build_target_info,
     corrected_need_moves_count
 )
 
@@ -99,6 +100,7 @@ def find_all_paths_to_target(start_board: cs.Board,
     validate_piece_counts(start_board, target_board)
 
     target_hash = target_board.zobrist_hash()
+    target_info = build_target_info(target_board)
     solutions = list(previous_solutions)
     interrupted = False
  
@@ -256,7 +258,9 @@ def find_all_paths_to_target(start_board: cs.Board,
             if cached is not None:
                 need_s, need_g = cached
             else:
-                need_s, need_g = corrected_need_moves_count(board, target_board, avail_s, avail_g, fixed_rfs)
+                need_s, need_g = corrected_need_moves_count(
+                    board, target_board, avail_s, avail_g, fixed_rfs, target_info
+                )
                 cost_tt_store(cost_tt, h_cost, (need_s, need_g), COST_TT_MAX_SIZE)
             if need_s > avail_s or need_g > avail_g:
                 ### DEBUG ###
