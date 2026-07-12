@@ -214,7 +214,7 @@ def find_all_paths_to_target(start_board: cs.Board,
                 continue
 
             # 不動駒チェック
-            if is_move_touching_fixed_piece(mv, fixed_rfs):
+            if fixed_rfs and is_move_touching_fixed_piece(mv, fixed_rfs):
                 continue
 
             # 着手
@@ -231,9 +231,26 @@ def find_all_paths_to_target(start_board: cs.Board,
 
             remain_child = max_depth - (depth + 1)
 
-            # 盤上手数計算
             avail_s = available_moves_for_side(remain_child, board.turn, 0)
             avail_g = available_moves_for_side(remain_child, board.turn, 1)
+
+            # 持駒チェック（盤上手数計算より軽いため先に判定）
+            need_hand_s = m_distance_vec(board.pieces_in_hand[0], target_board.pieces_in_hand[0])
+            need_hand_g = m_distance_vec(board.pieces_in_hand[1], target_board.pieces_in_hand[1])
+            if need_hand_s > avail_s:
+                pruned_diff_hand_s += 1
+                pruned_by_depth[depth] += 1
+                board.pop()
+                path.pop()
+                continue
+            if need_hand_g > avail_g:
+                pruned_diff_hand_g += 1
+                pruned_by_depth[depth] += 1
+                board.pop()
+                path.pop()
+                continue
+
+            # 盤上手数計算
             h_cost = (board.zobrist_hash(), avail_s, avail_g)
             cached = cost_tt_get(cost_tt, h_cost, cost_tt_stats)
             if cached is not None:
@@ -255,22 +272,6 @@ def find_all_paths_to_target(start_board: cs.Board,
                             out("----------", 1)
                 #############
                 pruned_need_moves += 1
-                pruned_by_depth[depth] += 1
-                board.pop()
-                path.pop()
-                continue
-
-            # 持駒チェック
-            need_hand_s = m_distance_vec(board.pieces_in_hand[0], target_board.pieces_in_hand[0])
-            need_hand_g = m_distance_vec(board.pieces_in_hand[1], target_board.pieces_in_hand[1])
-            if need_hand_s > avail_s:
-                pruned_diff_hand_s += 1
-                pruned_by_depth[depth] += 1
-                board.pop()
-                path.pop()
-                continue
-            if need_hand_g > avail_g:
-                pruned_diff_hand_g += 1
                 pruned_by_depth[depth] += 1
                 board.pop()
                 path.pop()

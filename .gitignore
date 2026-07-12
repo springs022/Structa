@@ -6,3 +6,10 @@ test/
 .vscode/
 __pycache__/
 *.pyc
+
+# 自動回帰テストは追跡し、test/manual の調査スクリプトは除外する
+!test/
+test/manual/
+!test/__init__.py
+!test/README.md
+!test/test_*.py
