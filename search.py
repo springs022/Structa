@@ -29,7 +29,7 @@ from validation import (
 )
 from board_utils import (
     get_boards_hash_from_usi,
-    m_distance_vec
+    hand_distance
 )
 from cost_calc import (
     available_moves_for_side,
@@ -101,6 +101,7 @@ def find_all_paths_to_target(start_board: cs.Board,
 
     target_hash = target_board.zobrist_hash()
     target_info = build_target_info(target_board)
+    target_hands = target_board.pieces_in_hand
     solutions = list(previous_solutions)
     interrupted = False
  
@@ -237,8 +238,9 @@ def find_all_paths_to_target(start_board: cs.Board,
             avail_g = available_moves_for_side(remain_child, board.turn, 1)
 
             # 持駒チェック（盤上手数計算より軽いため先に判定）
-            need_hand_s = m_distance_vec(board.pieces_in_hand[0], target_board.pieces_in_hand[0])
-            need_hand_g = m_distance_vec(board.pieces_in_hand[1], target_board.pieces_in_hand[1])
+            hands = board.pieces_in_hand
+            need_hand_s = hand_distance(hands[0], target_hands[0])
+            need_hand_g = hand_distance(hands[1], target_hands[1])
             if need_hand_s > avail_s:
                 pruned_diff_hand_s += 1
                 pruned_by_depth[depth] += 1

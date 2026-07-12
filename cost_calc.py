@@ -78,7 +78,7 @@ class TargetInfo:
 
 @dataclass
 class BoardAnalysis:
-    pieces: tuple[int, ...]
+    pieces: list[int]
     piece_positions: dict[int, list[int]]
     protected_sqs: set[int]
 
@@ -665,17 +665,15 @@ def build_target_info(target_board: cs.Board) -> TargetInfo:
 
 def analyze_board(board: cs.Board, target_info: TargetInfo) -> BoardAnalysis:
     """現在局面を1回走査し、コスト計算で共有する情報を構築する。"""
-    pieces = []
+    pieces = board.pieces
     positions = defaultdict(list)
     protected_sqs = set()
-    for sq, target_piece in enumerate(target_info.pieces):
-        piece = board.piece(sq)
-        pieces.append(piece)
+    for sq, piece in enumerate(pieces):
         if piece != cs.NONE:
             positions[piece].append(sq)
-            if piece == target_piece:
+            if piece == target_info.pieces[sq]:
                 protected_sqs.add(sq)
-    return BoardAnalysis(tuple(pieces), positions, protected_sqs)
+    return BoardAnalysis(pieces, positions, protected_sqs)
 
 def need_moves_count(
     start_board: cs.Board,
@@ -722,7 +720,7 @@ def nifu_penalty_for_side(
     piece_costs: list[PieceCost],
     start_board: cs.Board,
     protected_sqs: set[int],
-    board_pieces: Optional[tuple[int, ...]] = None,
+    board_pieces: Optional[list[int]] = None,
 ) -> int:
     """
     二歩に関する必要追加手数を返す。

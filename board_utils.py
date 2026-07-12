@@ -234,6 +234,18 @@ def m_distance_vec(a: List[int], b: List[int]) -> int:
         raise ValueError("Lists must have the same length")
     return sum(abs(x - y) for x, y in zip(a, b))
 
+def hand_distance(a: List[int], b: List[int]) -> int:
+    """7種類で固定された持駒ベクトル間のマンハッタン距離を返す。"""
+    return (
+        abs(a[0] - b[0])
+        + abs(a[1] - b[1])
+        + abs(a[2] - b[2])
+        + abs(a[3] - b[3])
+        + abs(a[4] - b[4])
+        + abs(a[5] - b[5])
+        + abs(a[6] - b[6])
+    )
+
 def count_pieces(board: cs.Board):
     """
     成生と先後を問わず、盤上＋持駒の各駒種の総数を数える。
