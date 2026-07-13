@@ -70,6 +70,7 @@ class TargetRequirement:
     piece: int
     owner: int
     promoted: bool
+    make_cost: int
 
 @dataclass(frozen=True)
 class TargetInfo:
@@ -540,7 +541,8 @@ def prom_cost_w_pos(
     board: cs.Board,
     piece: int,
     dst_sq: int,
-    piece_positions: dict[int, list[int]]
+    piece_positions: dict[int, list[int]],
+    precomputed_make_cost: Optional[int] = None,
 ) -> Optional[Tuple[int, int]]:
     """
     board において、piece（成駒）を dst_sq に設置するのに掛かる
@@ -555,22 +557,11 @@ def prom_cost_w_pos(
         return 0, 0
     base_piece = unpromote(piece)
     candidates = {piece, base_piece}
-    _, dst_rank = sq_to_file_rank(dst_sq)
-    norm_rank = dst_rank if owner == 0 else 10 - dst_rank
     move_cost = 100
-    if piece in (
-        cs.BPROM_PAWN, cs.WPROM_PAWN,
-        cs.BPROM_LANCE, cs.WPROM_LANCE,
-        cs.BPROM_KNIGHT, cs.WPROM_KNIGHT
-    ):
-        make_cost = max(2, norm_rank - 1)
-    elif piece in (
-        cs.BPROM_SILVER, cs.WPROM_SILVER
-    ):
-        make_cost = max(2, norm_rank - 2)
+    if precomputed_make_cost is not None:
+        make_cost = precomputed_make_cost
     else:
-        # 龍・馬は持駒を打って作るなら必ず２手
-        make_cost = 2
+        make_cost = target_make_cost(piece, owner, dst_sq, True)
     
     for p in candidates:
         for sq in piece_positions.get(p, ()):
@@ -614,7 +605,8 @@ def unprom_cost_w_pos(
     board: cs.Board,
     piece: int,
     dst_sq: int,
-    piece_positions: dict[int, list[int]]
+    piece_positions: dict[int, list[int]],
+    precomputed_make_cost: Optional[int] = None,
 ) -> Optional[Tuple[int, int]]:
     """
     board において、piece（生駒）を dst_sq に設置するのに掛かる
@@ -627,9 +619,11 @@ def unprom_cost_w_pos(
         return None
     if board.piece(dst_sq) == piece:
         return 0, 0
-    make_cost = 1
-    if piece in (cs.BKING, cs.WKING):
-        make_cost = 100
+    make_cost = (
+        precomputed_make_cost
+        if precomputed_make_cost is not None
+        else target_make_cost(piece, owner, dst_sq, False)
+    )
     move_cost = 100
     for sq in piece_positions.get(piece, ()):
         cost = unprom_move_cost(piece, sq, dst_sq)
@@ -651,6 +645,22 @@ def build_piece_positions(board: cs.Board) -> dict[int, list[int]]:
             positions[p].append(sq)
     return positions
 
+def target_make_cost(piece: int, owner: int, dst_sq: int, promoted: bool) -> int:
+    """目標駒を持駒から作るための、局面に依存しない最低手数を返す。"""
+    if not promoted:
+        return 100 if piece in (cs.BKING, cs.WKING) else 1
+    _, dst_rank = sq_to_file_rank(dst_sq)
+    norm_rank = dst_rank if owner == cs.BLACK else 10 - dst_rank
+    if piece in (
+        cs.BPROM_PAWN, cs.WPROM_PAWN,
+        cs.BPROM_LANCE, cs.WPROM_LANCE,
+        cs.BPROM_KNIGHT, cs.WPROM_KNIGHT,
+    ):
+        return max(2, norm_rank - 1)
+    if piece in (cs.BPROM_SILVER, cs.WPROM_SILVER):
+        return max(2, norm_rank - 2)
+    return 2
+
 def build_target_info(target_board: cs.Board) -> TargetInfo:
     """探索中に変化しない目標局面の盤上情報を事前計算する。"""
     pieces = tuple(target_board.piece(sq) for sq in range(81))
@@ -658,8 +668,12 @@ def build_target_info(target_board: cs.Board) -> TargetInfo:
     for sq, piece in enumerate(pieces):
         owner = piece_owner(piece)
         if owner in (cs.BLACK, cs.WHITE):
+            promoted = is_promoted(piece)
             requirements.append(
-                TargetRequirement(sq, piece, owner, is_promoted(piece))
+                TargetRequirement(
+                    sq, piece, owner, promoted,
+                    target_make_cost(piece, owner, sq, promoted),
+                )
             )
     return TargetInfo(pieces, tuple(requirements))
 
@@ -699,9 +713,13 @@ def need_moves_count(
         if board_analysis.pieces[sq] == p:
             continue
         if requirement.promoted:
-            res = prom_cost_w_pos(start_board, p, sq, piece_positions)
+            res = prom_cost_w_pos(
+                start_board, p, sq, piece_positions, requirement.make_cost
+            )
         else:
-            res = unprom_cost_w_pos(start_board, p, sq, piece_positions)
+            res = unprom_cost_w_pos(
+                start_board, p, sq, piece_positions, requirement.make_cost
+            )
         if res is None:
             continue
         make_cost, move_cost = res
@@ -780,16 +798,26 @@ def corrected_need_moves_count(
         if count > 0 and hand_idx in HAND_TO_PIECE:
             droppable_pieces_g.add(HAND_TO_PIECE[hand_idx])
 
-    # 後手の再計算（1回目）
-    if s_cost == avail_s and g_cost <= avail_g:
-        takeable_pieces = set()
+    takeable_cache = [None, None]
+
+    def takeable_piece_types(side: int) -> set[int]:
+        cached = takeable_cache[side]
+        if cached is not None:
+            return cached
+        result = set()
         for piece, sqs in piece_positions.items():
-            if piece_owner(piece) != cs.BLACK:
+            if piece_owner(piece) != side:
                 continue
             for sq in sqs:
                 if sq not in untakeable_sqs:
-                    takeable_pieces.add(normalize_piece(piece))
+                    result.add(normalize_piece(piece))
                     break
+        takeable_cache[side] = result
+        return result
+
+    # 後手の再計算（1回目）
+    if s_cost == avail_s and g_cost <= avail_g:
+        takeable_pieces = takeable_piece_types(cs.BLACK)
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
@@ -801,14 +829,7 @@ def corrected_need_moves_count(
             return INF, INF
     # 先手の再計算
     if g_cost == avail_g and s_cost <= avail_s:
-        takeable_pieces = set()
-        for piece, sqs in piece_positions.items():
-            if piece_owner(piece) != cs.WHITE:
-                continue
-            for sq in sqs:
-                if sq not in untakeable_sqs:
-                    takeable_pieces.add(normalize_piece(piece))
-                    break
+        takeable_pieces = takeable_piece_types(cs.WHITE)
         new_s_cost = 0
         for pc in piece_costs_s:
             if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_s:
@@ -820,14 +841,7 @@ def corrected_need_moves_count(
             return INF, INF
     # 後手の再計算（2回目）
     if s_cost == avail_s and g_cost <= avail_g:
-        takeable_pieces = set()
-        for piece, sqs in piece_positions.items():
-            if piece_owner(piece) != cs.BLACK:
-                continue
-            for sq in sqs:
-                if sq not in untakeable_sqs:
-                    takeable_pieces.add(normalize_piece(piece))
-                    break
+        takeable_pieces = takeable_piece_types(cs.BLACK)
         new_g_cost = 0
         for pc in piece_costs_g:
             if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
