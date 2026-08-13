@@ -71,7 +71,6 @@ def log_system_info():
     out(f"CPU使用率(初期)：{psutil.cpu_percent(interval=0.1)}%", 3)
     out(f"総メモリ：{vm.total // (1024**2):,} MB", 3)
     out(f"利用可能メモリ：{vm.available // (1024**2):,} MB", 3)
-    out('--------------------', 3)
 
 def print_solution_kif(start_board: cs.Board, moves: List[int]) -> None:
     """

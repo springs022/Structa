@@ -12,3 +12,6 @@ ST_POS_OUTPUT_MODE = 1
 
 # 置換表メモリ上限（MB）
 TT_MEMORY_MB = 256
+
+# 並列プロセス数（0：自動＝物理コア数、1：直列実行）
+PROCESSES = 0

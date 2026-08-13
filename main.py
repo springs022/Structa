@@ -21,6 +21,7 @@ import time
 import datetime
 import json
 import argparse
+import multiprocessing
 import faulthandler
 faulthandler.enable()
 import config
@@ -42,8 +43,14 @@ from validation import (
     validate_two_digits,
 )
 from search import find_all_paths_to_target
+from parallel import (
+    decide_process_count,
+    find_all_paths_to_target_parallel,
+)
 
 if __name__ == "__main__":
+    # PyInstaller でビルドした exe から子プロセスを起動するために必須
+    multiprocessing.freeze_support()
     try:
         # 引数パース
         parser = argparse.ArgumentParser(description="Structa - Shogi Proof Game Proofer")
@@ -72,6 +79,7 @@ if __name__ == "__main__":
         config.output_level = int(cfg.get("OUTPUT_LEVEL", 1))
         st_pos_output_mode = int(cfg.get("ST_POS_OUTPUT_MODE", 1))
         tt_memory_mb = int(cfg.get("TT_MEMORY_MB", 256))
+        cfg_processes = int(cfg.get("PROCESSES", 0))
         cfg_input = cfg.get("INPUT_FILE", "")
         cfg_output = cfg.get("OUTPUT_FILE", "")
         if args.input:
@@ -158,6 +166,10 @@ if __name__ == "__main__":
         print("不動駒設定エラー", e)
         sys.exit(1)
     
+    # 表示と実行で同じ並列設定を使う。
+    n_procs = decide_process_count(cfg_processes)
+    use_parallel = (n_procs > 1) and (max_depth >= 3) and (not debug_usis)
+
     dt_now = datetime.datetime.now()
     out('【開始】' + 'Structa ' + config.VERSION + ', ' + dt_now.strftime('%Y-%m-%d %H:%M:%S'), 0, console=True)
     out(f"入力ファイル：{input_file}", 1)
@@ -177,6 +189,9 @@ if __name__ == "__main__":
         out(f"不動駒：{s}", 0, console=True)
     out('--------------------', 1, console=True)
     log_system_info()  # OUTPUT_LEVEL = 3 のときのみ環境情報を出力
+    if use_parallel:
+        out(f"並列実行：{n_procs} プロセス", 1, console=True)
+    out('--------------------', 1, console=True)
 
     # 処理実行
     try:
@@ -236,7 +251,13 @@ if __name__ == "__main__":
 
         t0 = time.time()
         out("探索中…", 1, True, False)
-        sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, previous_solutions, debug_usis)
+        if use_parallel:
+            sols, stats, completed_first_moves, interrupted = find_all_paths_to_target_parallel(
+                start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
+                margin, first_move_index, previous_solutions, n_procs
+            )
+        else:
+            sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, previous_solutions, debug_usis)
         if interrupted:
             out("", 0, console=True, file=False)
             print("再開用ファイルを出力しますか？（Y/N）")
@@ -264,6 +285,8 @@ if __name__ == "__main__":
         total = stats["total_nodes"]
         
         def pct(x):
+            if not total:
+                return "0.00%"
             return f"{(x/total*100):.2f}%"
         
         out("---- 枝刈り統計 ----", 2)

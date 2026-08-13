@@ -71,17 +71,49 @@ class TargetRequirement:
     owner: int
     promoted: bool
     make_cost: int
+    # 高速化のための事前計算。この目標マスを埋めうる盤上駒の駒種と、
+    # 大駒（馬・龍）かどうかのフラグ。
+    candidates: tuple = ()
+    is_major: bool = False
 
 @dataclass(frozen=True)
 class TargetInfo:
     pieces: tuple[int, ...]
     requirements: tuple[TargetRequirement, ...]
+    # 二歩ペナルティの判定が必要かどうか（と金の設置要求があるかどうか）を先後別に持つ。
+    # 不要なら protected_sqs の構築自体を省略できる。
+    needs_nifu_check: tuple = (False, False)
 
-@dataclass
 class BoardAnalysis:
-    pieces: list[int]
-    piece_positions: dict[int, list[int]]
-    protected_sqs: set[int]
+    """
+    現局面の解析結果。
+
+    protected_sqs は「目標局面と一致しているマス」の集合だが、
+    実際に参照されるのは
+        - need == avail のときの再計算（takeable_piece_types）
+        - と金の設置要求があるときの二歩ペナルティ
+    に限られる。毎ノードで作ると無駄が大きいので遅延生成にしている。
+    """
+
+    __slots__ = ("pieces", "piece_positions", "target_pieces", "_protected_sqs")
+
+    def __init__(self, pieces, piece_positions, target_pieces):
+        self.pieces = pieces
+        self.piece_positions = piece_positions
+        self.target_pieces = target_pieces
+        self._protected_sqs = None
+
+    @property
+    def protected_sqs(self) -> set:
+        cached = self._protected_sqs
+        if cached is None:
+            target_pieces = self.target_pieces
+            cached = {
+                sq for sq, piece in enumerate(self.pieces)
+                if piece != cs.NONE and piece == target_pieces[sq]
+            }
+            self._protected_sqs = cached
+        return cached
 
 def count_position_diffs(board: cs.Board, target: cs.Board) -> List[int]:
     """
@@ -661,33 +693,117 @@ def target_make_cost(piece: int, owner: int, dst_sq: int, promoted: bool) -> int
         return max(2, norm_rank - 2)
     return 2
 
+_MAJOR_PROM_PIECES = (
+    cs.BPROM_BISHOP, cs.WPROM_BISHOP, cs.BPROM_ROOK, cs.WPROM_ROOK
+)
+
 def build_target_info(target_board: cs.Board) -> TargetInfo:
     """探索中に変化しない目標局面の盤上情報を事前計算する。"""
     pieces = tuple(target_board.piece(sq) for sq in range(81))
     requirements = []
+    needs_nifu = [False, False]
     for sq, piece in enumerate(pieces):
         owner = piece_owner(piece)
         if owner in (cs.BLACK, cs.WHITE):
             promoted = is_promoted(piece)
+            if promoted:
+                candidates = (piece, unpromote(piece))
+            else:
+                candidates = (piece,)
+            if piece in (cs.BPROM_PAWN, cs.WPROM_PAWN):
+                needs_nifu[owner] = True
             requirements.append(
                 TargetRequirement(
                     sq, piece, owner, promoted,
                     target_make_cost(piece, owner, sq, promoted),
+                    candidates,
+                    piece in _MAJOR_PROM_PIECES,
                 )
             )
-    return TargetInfo(pieces, tuple(requirements))
+    return TargetInfo(pieces, tuple(requirements), (needs_nifu[0], needs_nifu[1]))
 
 def analyze_board(board: cs.Board, target_info: TargetInfo) -> BoardAnalysis:
     """現在局面を1回走査し、コスト計算で共有する情報を構築する。"""
     pieces = board.pieces
     positions = defaultdict(list)
-    protected_sqs = set()
     for sq, piece in enumerate(pieces):
         if piece != cs.NONE:
             positions[piece].append(sq)
-            if piece == target_info.pieces[sq]:
-                protected_sqs.add(sq)
-    return BoardAnalysis(pieces, positions, protected_sqs)
+    return BoardAnalysis(pieces, positions, target_info.pieces)
+
+def _move_cost_for_requirement(req: TargetRequirement, piece_positions: dict) -> int:
+    """
+    盤上の駒を動かして req の目標マスを埋める最小手数。
+
+    ここは探索の最内周なので、minor_p_cost / major_p_cost / unprom_move_cost の
+    関数呼び出しを避け、事前計算テーブルを直接引く。
+    テーブルが未計算（_COST_UNKNOWN）のときだけ元の関数を呼んで埋める。
+    """
+    dst_sq = req.sq
+    move_cost = 100
+    if req.promoted:
+        table = _MAJOR_P_COST_TABLE if req.is_major else _MINOR_P_COST_TABLE
+        cost_fn = major_p_cost if req.is_major else minor_p_cost
+        for cand in req.candidates:
+            base = cand * SQUARE_NB
+            for src_sq in piece_positions.get(cand, ()):
+                idx = (base + src_sq) * SQUARE_NB + dst_sq
+                c = table[idx]
+                if c == _COST_UNKNOWN:
+                    cost_fn(cand, src_sq, dst_sq)
+                    c = table[idx]
+                if 0 <= c < move_cost:
+                    move_cost = c
+    else:
+        piece = req.piece
+        base = piece * SQUARE_NB
+        table = _UNPROM_MOVE_COST_TABLE
+        for src_sq in piece_positions.get(piece, ()):
+            idx = (base + src_sq) * SQUARE_NB + dst_sq
+            c = table[idx]
+            if c == _COST_UNKNOWN:
+                unprom_move_cost(piece, src_sq, dst_sq)
+                c = table[idx]
+            if 0 <= c < move_cost:
+                move_cost = c
+    return move_cost
+
+def _collect_costs(board_analysis: BoardAnalysis,
+                   target_info: TargetInfo,
+                   avail_s: int,
+                   avail_g: int):
+    """
+    先後別に (piece, sq, make_cost, move_cost) のタプル列と、
+    min(make, move) の総和を返す。
+
+    途中で総和が avail を超えた時点で打ち切り None を返す（早期脱出）。
+    呼び出し側は「need > avail か」しか見ないため、この打ち切りで判定は変わらない。
+    """
+    board_pieces = board_analysis.pieces
+    piece_positions = board_analysis.piece_positions
+    costs_s = []
+    costs_g = []
+    s_cost = 0
+    g_cost = 0
+    for req in target_info.requirements:
+        sq = req.sq
+        piece = req.piece
+        if board_pieces[sq] == piece:
+            continue
+        make_cost = req.make_cost
+        move_cost = _move_cost_for_requirement(req, piece_positions)
+        base = make_cost if make_cost < move_cost else move_cost
+        if req.owner == cs.BLACK:
+            s_cost += base
+            if s_cost > avail_s:
+                return None
+            costs_s.append((piece, sq, make_cost, move_cost))
+        else:
+            g_cost += base
+            if g_cost > avail_g:
+                return None
+            costs_g.append((piece, sq, make_cost, move_cost))
+    return costs_s, costs_g, s_cost, g_cost
 
 def need_moves_count(
     start_board: cs.Board,
@@ -735,7 +851,7 @@ def need_moves_count(
 
 def nifu_penalty_for_side(
     side: int,
-    piece_costs: list[PieceCost],
+    piece_costs: list,
     start_board: cs.Board,
     protected_sqs: set[int],
     board_pieces: Optional[list[int]] = None,
@@ -743,6 +859,8 @@ def nifu_penalty_for_side(
     """
     二歩に関する必要追加手数を返す。
     と金の設置が必要な状況で、すでに同じ筋に目標達成済の歩があれば、少なくとも１手余計に掛かる。これらの総和。
+
+    piece_costs は PieceCost でも (piece, sq, make_cost, move_cost) タプルでもよい。
     """
     prom_pawn = cs.BPROM_PAWN if side == 0 else cs.WPROM_PAWN
     pawn = cs.BPAWN if side == 0 else cs.WPAWN
@@ -750,8 +868,12 @@ def nifu_penalty_for_side(
     # 設置が必要な「と金」の筋
     prom_pawn_files = set()
     for pc in piece_costs:
-        if pc.piece == prom_pawn:
-            f, _ = sq_to_file_rank(pc.sq)
+        if isinstance(pc, PieceCost):
+            pc_piece, pc_sq = pc.piece, pc.sq
+        else:
+            pc_piece, pc_sq = pc[0], pc[1]
+        if pc_piece == prom_pawn:
+            f, _ = sq_to_file_rank(pc_sq)
             prom_pawn_files.add(f)
 
     if not prom_pawn_files:
@@ -772,89 +894,108 @@ def corrected_need_moves_count(
     target_board: cs.Board,
     avail_s: int,
     avail_g: int,
-    fixed_rfs: set[int],
+    fixed_sqs: set[int],
     target_info: Optional[TargetInfo] = None,
+    hands=None,
 ) -> Tuple[int, int]:
+    """
+    先後それぞれが目標局面を実現するのに最低限必要な手数を返す。
+
+    fixed_sqs は不動駒の「square index（0〜80）」の集合。
+    ※ 旧版は問題ファイル由来の 2 桁筋段（13、19 など）をそのまま
+      square index として protected_sqs と union していたため、
+      無関係なマスを「取れない駒」と誤認していた。
+      誤認は下界を過大にする方向に働くため、解の取りこぼしを起こしうる。
+    hands には board.pieces_in_hand を渡せる（呼び出し側で取得済みなら再取得しない）。
+    """
     if target_info is None:
         target_info = build_target_info(target_board)
     board_analysis = analyze_board(start_board, target_info)
-    piece_costs_s, piece_costs_g = need_moves_count(
-        start_board, target_board, target_info, board_analysis
-    )
-    s_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_s)
-    g_cost = sum(min(pc.make_cost, pc.move_cost) for pc in piece_costs_g)
-    if s_cost > avail_s or g_cost > avail_g:
+    collected = _collect_costs(board_analysis, target_info, avail_s, avail_g)
+    if collected is None:
         return INF, INF
-    piece_positions = board_analysis.piece_positions
-    protected_sqs = board_analysis.protected_sqs
-    untakeable_sqs = protected_sqs | fixed_rfs
-    hand_s, hand_g = start_board.pieces_in_hand
-    droppable_pieces_s = set()
-    droppable_pieces_g = set()
-    for hand_idx, count in enumerate(hand_s):
-        if count > 0 and hand_idx in HAND_TO_PIECE:
-            droppable_pieces_s.add(HAND_TO_PIECE[hand_idx])
-    for hand_idx, count in enumerate(hand_g):
-        if count > 0 and hand_idx in HAND_TO_PIECE:
-            droppable_pieces_g.add(HAND_TO_PIECE[hand_idx])
+    piece_costs_s, piece_costs_g, s_cost, g_cost = collected
 
-    takeable_cache = [None, None]
+    untakeable_sqs = None
 
-    def takeable_piece_types(side: int) -> set[int]:
-        cached = takeable_cache[side]
-        if cached is not None:
-            return cached
-        result = set()
-        for piece, sqs in piece_positions.items():
-            if piece_owner(piece) != side:
-                continue
-            for sq in sqs:
-                if sq not in untakeable_sqs:
-                    result.add(normalize_piece(piece))
-                    break
-        takeable_cache[side] = result
-        return result
+    # 再計算（取れない駒・打てない駒は make_cost を使えない）は
+    # need == avail のときにしか起動しない。前段のコスト集計で
+    # avail を超えたものは既に打ち切られているので、ここでの判定は等号のみでよい。
+    if s_cost == avail_s or g_cost == avail_g:
+        piece_positions = board_analysis.piece_positions
+        untakeable_sqs = board_analysis.protected_sqs | fixed_sqs
+        if hands is None:
+            hands = start_board.pieces_in_hand
+        hand_s, hand_g = hands
+        droppable_pieces_s = set()
+        droppable_pieces_g = set()
+        for hand_idx, count in enumerate(hand_s):
+            if count > 0 and hand_idx in HAND_TO_PIECE:
+                droppable_pieces_s.add(HAND_TO_PIECE[hand_idx])
+        for hand_idx, count in enumerate(hand_g):
+            if count > 0 and hand_idx in HAND_TO_PIECE:
+                droppable_pieces_g.add(HAND_TO_PIECE[hand_idx])
 
-    # 後手の再計算（1回目）
-    if s_cost == avail_s and g_cost <= avail_g:
-        takeable_pieces = takeable_piece_types(cs.BLACK)
-        new_g_cost = 0
-        for pc in piece_costs_g:
-            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
-                new_g_cost += min(pc.make_cost, pc.move_cost)
-            else:
-                new_g_cost += pc.move_cost
-        g_cost = new_g_cost
-        if g_cost > avail_g:
-            return INF, INF
-    # 先手の再計算
-    if g_cost == avail_g and s_cost <= avail_s:
-        takeable_pieces = takeable_piece_types(cs.WHITE)
-        new_s_cost = 0
-        for pc in piece_costs_s:
-            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_s:
-                new_s_cost += min(pc.make_cost, pc.move_cost)
-            else:
-                new_s_cost += pc.move_cost
-        s_cost = new_s_cost
-        if s_cost > avail_s:
-            return INF, INF
-    # 後手の再計算（2回目）
-    if s_cost == avail_s and g_cost <= avail_g:
-        takeable_pieces = takeable_piece_types(cs.BLACK)
-        new_g_cost = 0
-        for pc in piece_costs_g:
-            if normalize_piece(pc.piece) in takeable_pieces or normalize_piece(pc.piece) in droppable_pieces_g:
-                new_g_cost += min(pc.make_cost, pc.move_cost)
-            else:
-                new_g_cost += pc.move_cost
-        g_cost = new_g_cost
-    # 二歩の考慮
-    s_cost += nifu_penalty_for_side(
-        cs.BLACK, piece_costs_s, start_board, untakeable_sqs, board_analysis.pieces
-    )
-    g_cost += nifu_penalty_for_side(
-        cs.WHITE, piece_costs_g, start_board, untakeable_sqs, board_analysis.pieces
-    )
+        takeable_cache = [None, None]
+
+        def takeable_piece_types(side: int) -> set[int]:
+            cached = takeable_cache[side]
+            if cached is not None:
+                return cached
+            result = set()
+            for piece, sqs in piece_positions.items():
+                if piece_owner(piece) != side:
+                    continue
+                for sq in sqs:
+                    if sq not in untakeable_sqs:
+                        result.add(normalize_piece(piece))
+                        break
+            takeable_cache[side] = result
+            return result
+
+        def recount(piece_costs, takeable_pieces, droppable_pieces) -> int:
+            total = 0
+            for piece, _sq, make_cost, move_cost in piece_costs:
+                np_piece = normalize_piece(piece)
+                if np_piece in takeable_pieces or np_piece in droppable_pieces:
+                    total += make_cost if make_cost < move_cost else move_cost
+                else:
+                    total += move_cost
+            return total
+
+        # 後手の再計算（1回目）
+        if s_cost == avail_s and g_cost <= avail_g:
+            g_cost = recount(
+                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g
+            )
+            if g_cost > avail_g:
+                return INF, INF
+        # 先手の再計算
+        if g_cost == avail_g and s_cost <= avail_s:
+            s_cost = recount(
+                piece_costs_s, takeable_piece_types(cs.WHITE), droppable_pieces_s
+            )
+            if s_cost > avail_s:
+                return INF, INF
+        # 後手の再計算（2回目）
+        if s_cost == avail_s and g_cost <= avail_g:
+            g_cost = recount(
+                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g
+            )
+
+    # 二歩の考慮（と金の設置要求がある側だけ）
+    needs_nifu_s, needs_nifu_g = target_info.needs_nifu_check
+    if needs_nifu_s or needs_nifu_g:
+        if untakeable_sqs is None:
+            untakeable_sqs = board_analysis.protected_sqs | fixed_sqs
+        board_pieces = board_analysis.pieces
+        if needs_nifu_s:
+            s_cost += nifu_penalty_for_side(
+                cs.BLACK, piece_costs_s, start_board, untakeable_sqs, board_pieces
+            )
+        if needs_nifu_g:
+            g_cost += nifu_penalty_for_side(
+                cs.WHITE, piece_costs_g, start_board, untakeable_sqs, board_pieces
+            )
     return s_cost, g_cost
 

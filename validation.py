@@ -91,8 +91,43 @@ def is_move_touching_fixed_piece(mv: int, fixed_set: set):
     戻り値：
         True：mv の移動元または移動先が fixed_set に含まれる
         False：含まれない
+
+    ※ 探索の最内周では文字列化のコストが無視できないため、
+      square index を使う is_move_touching_fixed_sqs を使うこと。
+      こちらは互換用に残している。
     """
     csa = cs.move_to_csa(mv)
     frm = int(csa[0:2])
     to  = int(csa[2:4])
     return frm in fixed_set or to in fixed_set
+
+def rf_to_sq(rf: int) -> int:
+    """2桁の筋段（例 76）を square index（0〜80）に変換する。"""
+    return (rf // 10 - 1) * 9 + (rf % 10 - 1)
+
+def rfs_to_sqs(fixed_rfs: set) -> set:
+    """2桁筋段の集合を square index の集合に変換する。"""
+    return {rf_to_sq(rf) for rf in fixed_rfs}
+
+# cshogi のビット取り出し API。存在しない版のために getattr で拾う。
+_move_from = getattr(cs, "move_from", None)
+_move_to = getattr(cs, "move_to", None)
+_HAS_BIT_API = _move_from is not None and _move_to is not None
+
+def is_move_touching_fixed_sqs(mv: int, fixed_sqs: set) -> bool:
+    """
+    mv の移動元または移動先が fixed_sqs（square index の集合）に含まれるか。
+
+    駒打ちの場合、cshogi の move_from は 81 以上の値（持駒種）を返すため、
+    0〜80 しか持たない fixed_sqs には決して一致しない。
+    これは旧実装（CSA の移動元 "00" が 0 になり一致しない）と同じ挙動。
+    """
+    if _HAS_BIT_API:
+        return _move_to(mv) in fixed_sqs or _move_from(mv) in fixed_sqs
+    csa = cs.move_to_csa(mv)
+    frm = int(csa[0:2])
+    to = int(csa[2:4])
+    return (
+        (to and rf_to_sq(to) in fixed_sqs)
+        or (frm and rf_to_sq(frm) in fixed_sqs)
+    )

@@ -54,7 +54,7 @@ class PositionCostTests(unittest.TestCase):
         self.assertEqual(
             (0, 1),
             corrected_need_moves_count(
-                self.start, self.target, avail_s=2, avail_g=1, fixed_rfs=set()
+                self.start, self.target, avail_s=2, avail_g=1, fixed_sqs=set()
             ),
         )
 
@@ -62,7 +62,7 @@ class PositionCostTests(unittest.TestCase):
         self.assertEqual(
             (INF, INF),
             corrected_need_moves_count(
-                self.start, self.target, avail_s=0, avail_g=0, fixed_rfs=set()
+                self.start, self.target, avail_s=0, avail_g=0, fixed_sqs=set()
             ),
         )
 
