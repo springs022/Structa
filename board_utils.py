@@ -200,6 +200,15 @@ def file_rank_str_from_sq(sq: int) -> str:
     f, r = sq_to_file_rank(sq)
     return f"{f}{r}"
 
+def position_key(sfen: str) -> str:
+    """
+    SFEN から手数カウンタを落とした「局面部分」（盤面・手番・持駒）を返す。
+
+    board.sfen() は手数を含むため、そのまま目標局面の SFEN と
+    文字列比較すると必ず不一致になる。局面の同一性判定にはこちらを使う。
+    """
+    return " ".join(sfen.split(" ")[:3])
+
 def sq_to_usi(sq: int) -> str:
     """
     square (0–80) を USI 座標（例: '7g'）に変換する。

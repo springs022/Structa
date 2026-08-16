@@ -15,3 +15,6 @@ TT_MEMORY_MB = 256
 
 # 並列プロセス数（0：自動＝物理コア数、1：直列実行）
 PROCESSES = 0
+
+# 終端の逆算手数（AUTO：自動、0：逆算なし、1～2：手動指定）
+RETRO_PLIES = AUTO

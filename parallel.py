@@ -29,11 +29,13 @@ import multiprocessing
 import os
 import signal
 import datetime
+import time
 
 import cshogi as cs
 
 import config
 from io_utils import out
+from retro import RetroFrontier, build_frontier
 from search import find_all_paths_to_target
 from validation import (
     adjust_target_turn,
@@ -48,6 +50,15 @@ _W = {}
 # 親プロセスが Ctrl+C を処理するために、結果待ちを無期限にしない。
 # ワーカーの探索はこの間も連続して実行される。
 RESULT_WAIT_TIMEOUT_SECONDS = 0.2
+
+# 初手 1 つの探索に長時間かかる場合も、停止していないことが分かるように
+# 進捗率が変わらなくてもこの間隔でタイムスタンプを更新する。
+PROGRESS_HEARTBEAT_SECONDS = 10.0
+
+
+def _should_build_retro_frontier(retro_plies) -> bool:
+    """0 だけを逆算無効値とし、AUTO は親で解決する。"""
+    return retro_plies != 0
 
 
 def decide_process_count(requested: int) -> int:
@@ -83,7 +94,7 @@ def enumerate_first_moves(start_board: cs.Board, fixed_rfs: set) -> list:
 
 
 def _worker_init(start_sfen, target_sfen, max_depth, limit,
-                 fixed_rfs, tt_memory_mb, margin):
+                 fixed_rfs, tt_memory_mb, margin, retro_payload):
     # Ctrl+C は親プロセスだけが受け取る
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     # 子プロセスからはログを一切出さない（out_fp を持っていない）
@@ -95,6 +106,10 @@ def _worker_init(start_sfen, target_sfen, max_depth, limit,
     _W["fixed_rfs"] = fixed_rfs
     _W["tt_memory_mb"] = tt_memory_mb
     _W["margin"] = margin
+    # 終端フロンティアは親で 1 回だけ作り、各ワーカーへ配る。
+    # 子は初手を 1 手指した局面から max_depth-1 手を探索するので、
+    # 照合する深さが 1 つ手前にずれるだけで、表そのものは共通に使える。
+    _W["retro"] = RetroFrontier.from_payload(retro_payload)
 
 
 def _worker_task(item):
@@ -115,6 +130,10 @@ def _worker_task(item):
         0,
         [],
         [],
+        # フロンティアは親で構築済み。子は絶対に作り直さない
+        # （親が RETRO_PLIES=0 と判断した場合も含めて親の決定に従う）。
+        retro_plies=0,
+        retro=_W["retro"],
     )
     sols_usi = [
         [mv_usi] + [cs.move_to_usi(m) for m in sol]
@@ -127,7 +146,8 @@ def _merge_stats(total: dict, part: dict, max_depth: int) -> None:
     """ワーカーの統計を親側に足し込む。手数別は 1 手ぶんずらす。"""
     for key in (
         "total_nodes", "pruned_diff_hand_s", "pruned_diff_hand_g",
-        "pruned_need_moves", "tt_lookups", "tt_hits", "tt_stores",
+        "pruned_need_moves", "frontier_misses",
+        "tt_lookups", "tt_hits", "tt_stores",
         "tt_store_updates", "tt_evictions", "cost_tt_lookups", "cost_tt_hits",
     ):
         total[key] = total.get(key, 0) + part.get(key, 0)
@@ -170,7 +190,9 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
                                       margin: int,
                                       first_move_index: int,
                                       previous_solutions: list,
-                                      processes: int):
+                                      processes: int,
+                                      retro_plies: int = 2,
+                                      on_frontier_ready=None):
     """
     直列版 find_all_paths_to_target と同じ戻り値
     (solutions, stats, completed_first_moves, interrupted) を返す。
@@ -196,6 +218,29 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
     done = set(i for (i, _u) in pairs if i < first_move_index)
     interrupted = False
 
+    # 終端フロンティアは親で 1 回だけ構築する
+    retro = None
+    if _should_build_retro_frontier(retro_plies):
+        retro = build_frontier(
+            target_board, max_depth, retro_plies,
+            log=lambda m: out(m, 2, console=True),
+        )
+    if retro is not None:
+        frontier_size = retro.layer_sizes[-1]
+        out(
+            f"終端フロンティア：{retro.k}手逆算"
+            f"（局面数 {frontier_size:,}、構築 {retro.build_seconds:.1f}秒）",
+            2, console=True
+        )
+        stats["retro_k"] = retro.k
+        stats["retro_layer_sizes"] = list(retro.layer_sizes)
+    retro_payload = retro.payload() if retro is not None else None
+
+    # コンソールでは終端フロンティアを並列設定の直後に見せられるよう、
+    # 構築と表示が済んだ時点を呼び出し元へ通知する。
+    if on_frontier_ready is not None:
+        on_frontier_ready()
+
     # ワーカーごとに置換表を持つので、上限メモリは分割する
     per_worker_mb = max(16, tt_memory_mb // max(1, processes))
 
@@ -204,7 +249,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
         processes=processes,
         initializer=_worker_init,
         initargs=(start_sfen, target_sfen, max_depth, limit,
-                  fixed_rfs, per_worker_mb, margin),
+                  fixed_rfs, per_worker_mb, margin, retro_payload),
     )
 
     all_indices = [i for (i, _u) in pairs]
@@ -223,6 +268,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
     collected = []
     try:
         show_progress()
+        next_progress_at = time.monotonic() + PROGRESS_HEARTBEAT_SECONDS
         result_iterator = pool.imap_unordered(_worker_task, todo, chunksize=1)
         while True:
             try:
@@ -232,6 +278,10 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
             except multiprocessing.TimeoutError:
                 # Windows では無期限の結果待ち中に Ctrl+C の処理が遅れる。
                 # 定期的に Python の実行へ戻し、割り込みを受け取れるようにする。
+                now = time.monotonic()
+                if now >= next_progress_at:
+                    show_progress()
+                    next_progress_at = now + PROGRESS_HEARTBEAT_SECONDS
                 continue
             except StopIteration:
                 break
@@ -242,6 +292,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
                 collected.append((index, sols_usi))
                 found_count[0] += len(sols_usi)
             show_progress()
+            next_progress_at = time.monotonic() + PROGRESS_HEARTBEAT_SECONDS
             if found_count[0] >= limit:
                 break
         show_progress()

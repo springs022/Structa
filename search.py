@@ -29,7 +29,8 @@ from validation import (
 )
 from board_utils import (
     get_boards_hash_from_usi,
-    hand_distance
+    hand_distance,
+    position_key
 )
 from cost_calc import (
     available_moves_for_side,
@@ -41,6 +42,10 @@ from tt import (
     CostTT,
     TT_ENTRY_SIZE,
     COST_TT_ENTRY_SIZE
+)
+from retro import (
+    build_frontier,
+    resolve_sequence
 )
 
 _MASK64 = 0xFFFFFFFFFFFFFFFF
@@ -58,14 +63,7 @@ def _depth_keys(n: int) -> list:
     return _DEPTH_KEYS
 
 
-def _position_key(sfen: str) -> str:
-    """
-    SFEN から手数カウンタを落とした「局面部分」を返す。
-
-    board.sfen() は手数を含むため、そのまま目標局面の SFEN と
-    文字列比較すると必ず不一致になる。
-    """
-    return " ".join(sfen.split(" ")[:3])
+_position_key = position_key
 
 
 def _new_tt_stats() -> dict:
@@ -91,7 +89,9 @@ def find_all_paths_to_target(start_board: cs.Board,
                              first_move_index: int,
                              previous_solutions: List[List[int]],
                              debug_usis: List[str],
-                             progress_prefix: str = ""):
+                             progress_prefix: str = "",
+                             retro_plies: int = 2,
+                             retro=None):
 
     # 置換表は残り手数を 1 バイトに詰めて持つ
     if max_depth > 126:
@@ -113,6 +113,32 @@ def find_all_paths_to_target(start_board: cs.Board,
     # 不動駒。着手フィルタ用に square index 集合を作る。
     fixed_sqs = rfs_to_sqs(fixed_rfs)
     use_fixed = bool(fixed_sqs)
+
+    # ---- 終端フロンティア（目標局面から k 手逆算した局面集合）----
+    # 深さ max_depth-k の局面をこの集合と照合するだけで打ち切れるので、
+    # 最終 k 層の合法手生成と着手が丸ごと不要になる。
+    if retro is None and retro_plies > 0:
+        retro = build_frontier(
+            target_board, max_depth, retro_plies,
+            log=lambda m: out(m, 2, console=True),
+        )
+    retro_k = retro.k if retro is not None else 0
+    if retro_k and (max_depth - retro_k) < 1:
+        # 終端の深さが根より浅くなる組み合わせ（想定外）。安全側に倒して無効化する。
+        retro = None
+        retro_k = 0
+    if retro_k:
+        frontier_get = retro.table.get
+        terminal_depth = max_depth - retro_k
+        frontier_size = retro.layer_sizes[-1]
+        out(
+            f"終端フロンティア：{retro_k}手逆算"
+            f"（局面数 {frontier_size:,}、構築 {retro.build_seconds:.1f}秒）",
+            2, console=True
+        )
+    else:
+        frontier_get = None
+        terminal_depth = max_depth
 
     # 深さごとの残り手数テーブル。
     # 深さ d（= 開始局面から d 手進んだ状態）での手番は start_turn と d の偶奇で決まるため、
@@ -153,6 +179,7 @@ def find_all_paths_to_target(start_board: cs.Board,
     pruned_diff_hand_s = 0
     pruned_diff_hand_g = 0
     pruned_need_moves = 0
+    frontier_misses = 0
     pruned_by_depth = [0] * (max_depth + 1)
 
     # DEBUG
@@ -233,11 +260,39 @@ def find_all_paths_to_target(start_board: cs.Board,
                 show_progress()
 
             # ---- 終端 ----
-            # 最終手の局面は「目標局面と一致するか」だけを見ればよい。
-            # 旧版はここでも子フレームを積んで合法手を全生成し、
-            # 持駒判定・盤上手数計算まで実行していたが、いずれも
-            # ハッシュ比較より弱い条件なので不要。
-            if child_depth == max_depth:
+            # 逆算フロンティアを使う場合は深さ max_depth-k、
+            # 使わない場合は深さ max_depth が終端。
+            # いずれもハッシュ 1 回の照合で決着するので、
+            # 合法手生成も持駒判定も盤上手数計算も要らない。
+            # 末端の失敗を置換表に登録しないのも同じ理由
+            # （再訪コストが小さい一方で件数が膨大なため、
+            #   有用な深いエントリを追い出してしまう）。
+            if child_depth == terminal_depth:
+                if retro_k:
+                    seqs = frontier_get(h)
+                    if seqs is not None:
+                        head = path + [mv]
+                        for seq in seqs:
+                            tail = resolve_sequence(
+                                board, seq, target_key,
+                                fixed_sqs if use_fixed else None,
+                                is_move_touching_fixed_sqs,
+                            )
+                            if tail is None:
+                                continue
+                            new_solution = head + tail
+                            if new_solution not in solutions:
+                                solutions.append(new_solution)
+                            frame[2] = True
+                        board.pop()
+                        pushed -= 1
+                        if len(solutions) >= limit:
+                            break
+                        continue
+                    frontier_misses += 1
+                    board.pop()
+                    pushed -= 1
+                    continue
                 # ハッシュ衝突で偽の解を出さないよう、一致時だけ実局面で確認する。
                 if h == target_hash and _position_key(board.sfen()) == target_key:
                     new_solution = path + [mv]
@@ -249,9 +304,6 @@ def find_all_paths_to_target(start_board: cs.Board,
                     if len(solutions) >= limit:
                         break
                     continue
-                # 末端の失敗は置換表に登録しない。
-                # 再訪時のコストがハッシュ比較 1 回しかない一方、
-                # 件数が膨大で、有用な深いエントリを追い出してしまうため。
                 board.pop()
                 pushed -= 1
                 continue
@@ -330,6 +382,9 @@ def find_all_paths_to_target(start_board: cs.Board,
         "pruned_diff_hand_s": pruned_diff_hand_s,
         "pruned_diff_hand_g": pruned_diff_hand_g,
         "pruned_need_moves": pruned_need_moves,
+        "frontier_misses": frontier_misses,
+        "retro_k": retro_k,
+        "retro_layer_sizes": list(retro.layer_sizes) if retro is not None else [],
         "pruned_by_depth": pruned_by_depth,
         "tt_lookups": tt_stats["lookups"],
         "tt_hits": tt_stats["hits"],

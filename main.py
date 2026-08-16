@@ -80,6 +80,15 @@ if __name__ == "__main__":
         st_pos_output_mode = int(cfg.get("ST_POS_OUTPUT_MODE", 1))
         tt_memory_mb = int(cfg.get("TT_MEMORY_MB", 256))
         cfg_processes = int(cfg.get("PROCESSES", 0))
+        retro_raw = cfg.get("RETRO_PLIES", "AUTO").upper()
+        if retro_raw == "AUTO":
+            retro_plies = "AUTO"
+        else:
+            retro_plies = int(retro_raw)
+            if retro_plies < 0:
+                retro_plies = 0
+            if retro_plies > 2:
+                retro_plies = 2
         cfg_input = cfg.get("INPUT_FILE", "")
         cfg_output = cfg.get("OUTPUT_FILE", "")
         if args.input:
@@ -191,7 +200,10 @@ if __name__ == "__main__":
     log_system_info()  # OUTPUT_LEVEL = 3 のときのみ環境情報を出力
     if use_parallel:
         out(f"並列実行：{n_procs} プロセス", 1, console=True)
-    out('--------------------', 1, console=True)
+        # ログの並びは変えず、コンソールへの表示だけフロンティア構築後に行う。
+        out('--------------------', 1, console=False)
+    else:
+        out('--------------------', 1, console=True)
 
     # 処理実行
     try:
@@ -250,14 +262,23 @@ if __name__ == "__main__":
                 out("最初から検討を行います。", 0, console=True)
 
         t0 = time.time()
-        out("探索中…", 1, True, False)
         if use_parallel:
+            def show_parallel_search_ready():
+                out('--------------------', 1, console=True, file=False)
+                out("探索中…", 1, console=True, file=False)
+
             sols, stats, completed_first_moves, interrupted = find_all_paths_to_target_parallel(
                 start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
-                margin, first_move_index, previous_solutions, n_procs
+                margin, first_move_index, previous_solutions, n_procs,
+                retro_plies, on_frontier_ready=show_parallel_search_ready
             )
         else:
-            sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(start, target, max_depth, limit, fixed_rfs, tt_memory_mb, margin, first_move_index, previous_solutions, debug_usis)
+            out("探索中…", 1, True, False)
+            sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(
+                start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
+                margin, first_move_index, previous_solutions, debug_usis,
+                retro_plies=retro_plies
+            )
         if interrupted:
             out("", 0, console=True, file=False)
             print("再開用ファイルを出力しますか？（Y/N）")
@@ -306,6 +327,19 @@ if __name__ == "__main__":
             f"{stats['pruned_diff_hand_g']:,} ({pct(stats['pruned_diff_hand_g'])})",
             2
         )
+
+        retro_k = stats.get("retro_k", 0)
+        if retro_k:
+            sizes = "、".join(f"{n:,}" for n in stats.get("retro_layer_sizes", []))
+            out("---- 終端フロンティア ----", 2)
+            out(f"逆算手数    ：{retro_k}手", 2)
+            out(f"逆算局面数  ：{sizes}", 2)
+            out(
+                f"照合で打切り："
+                f"{stats.get('frontier_misses', 0):,} "
+                f"({pct(stats.get('frontier_misses', 0))})",
+                2
+            )
 
         out("---- 手数別 ----", 2)
         for d, c in enumerate(stats["pruned_by_depth"]):

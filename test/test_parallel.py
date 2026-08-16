@@ -4,6 +4,7 @@ import cshogi as cs
 
 from parallel import (
     _completed_prefix,
+    _should_build_retro_frontier,
     decide_process_count,
     enumerate_first_moves,
 )
@@ -51,6 +52,13 @@ class ProcessCountTests(unittest.TestCase):
 
     def test_auto_returns_at_least_one(self):
         self.assertGreaterEqual(decide_process_count(0), 1)
+
+
+class RetroFrontierSelectionTests(unittest.TestCase):
+    def test_auto_is_built_by_parent(self):
+        self.assertTrue(_should_build_retro_frontier("AUTO"))
+        self.assertTrue(_should_build_retro_frontier(2))
+        self.assertFalse(_should_build_retro_frontier(0))
 
 
 if __name__ == "__main__":

@@ -329,103 +329,38 @@ def get_min_move_cost(piece: int, src_sq: int, dst_sq: int, need_prom: bool) -> 
                         q.append(s1)
     return INF
 
-def try_add_prev_board(result: list[cs.Board], prev: cs.Board, mv: int) -> None:
+def try_add_prev_board(result: list[cs.Board], prev: cs.Board, mv: int,
+                       board: cs.Board = None) -> None:
     """
     １手前局面候補 prev において mv を指した場合に合法な局面なら result に prev を追加する。
+
+    board を渡した場合は、prev で mv を指した結果が本当に board になることまで確認する。
     """
+    if is_check_for_other_side(prev):
+        return
+    if are_kings_adjacent(prev):
+        return
+    if has_nifu(prev):
+        return
     if not prev.is_legal(mv):
         return
-    test = prev.copy()
-    if is_check_for_other_side(test):
-        return
-    if are_kings_adjacent(test):
-        return
-    if has_nifu(test):
-        return
-    test.push(mv)
+    if board is not None:
+        test = prev.copy()
+        test.push(mv)
+        if test.zobrist_hash() != board.zobrist_hash():
+            return
     result.append(prev)
 
 def previous_boards(board: cs.Board) -> list[cs.Board]:
     """
     合法な１手前の局面を返す。
+
+    実体は retro.previous_positions に移した。旧実装には
+      - 成る手の USI に "+" が付いておらず、成って移動した１手前局面を
+        取り違えていた
+      - 出発マスを 81 マス総当たりしていて非常に遅い
+    という問題があった。
     """
-    result = []
-    prev_turn = 1 - board.turn
+    from retro import previous_positions
+    return [prev for prev, _usi in previous_positions(board)]
 
-    for dst_sq in range(81):
-        p = board.piece(dst_sq)
-        if piece_owner(p) != prev_turn:
-            continue
-        dst_rank = sq_to_file_rank(dst_sq)[1]
-        pieces_org = board.pieces
-        pieces_in_hand_org = board.pieces_in_hand
-
-        for src_sq in range(81):
-            if board.piece(src_sq) != cs.NONE:
-                continue
-            src_rank = sq_to_file_rank(src_sq)[1]
-            p_candidates = [p]
-            if p in PROM_PIECES:
-                base = demote(p)
-                if base is not None:
-                    if (
-                        in_prom_zone(prev_turn, src_rank)
-                        or in_prom_zone(prev_turn, dst_rank)
-                    ):
-                        p_candidates.append(base)
-            ### 駒を取らない盤上の移動 ###
-            for p_prev in p_candidates:
-                pieces_prev = pieces_org.copy()
-                pieces_prev[dst_sq] = cs.NONE
-                pieces_prev[src_sq] = p_prev
-                pieces_in_hand_prev = (
-                    pieces_in_hand_org[0].copy(),
-                    pieces_in_hand_org[1].copy(),
-                )
-                prev = board.copy()
-                prev.set_pieces(pieces_prev, pieces_in_hand_prev)
-                prev.turn = prev_turn
-                usi = sq_to_usi(src_sq) + sq_to_usi(dst_sq)
-                mv = prev.move_from_usi(usi)
-                try_add_prev_board(result, prev, mv)
-            ### 駒を取る盤上の移動 ###
-            for p_prev in p_candidates:
-                for q in cs.HAND_PIECES:
-                    if pieces_in_hand_org[prev_turn][q] <= 0:
-                        continue
-                    captured_pieces = hand_piece_to_board_pieces(q, board.turn)
-                    for cp in captured_pieces:
-                        # 行き所のない駒
-                        if is_dead_end_piece(cp, board.turn, dst_rank):
-                            continue
-                        pieces_prev = pieces_org.copy()
-                        pieces_prev[dst_sq] = cp
-                        pieces_prev[src_sq] = p_prev
-                        pieces_in_hand_prev = (
-                            pieces_in_hand_org[0].copy(),
-                            pieces_in_hand_org[1].copy(),
-                        )
-                        pieces_in_hand_prev[prev_turn][q] -= 1
-                        prev = board.copy()
-                        prev.set_pieces(pieces_prev, pieces_in_hand_prev)
-                        prev.turn = prev_turn
-                        usi = sq_to_usi(src_sq) + sq_to_usi(dst_sq)
-                        mv = prev.move_from_usi(usi)
-                        try_add_prev_board(result, prev, mv)
-        ### 駒打ち ###
-        if p in (cs.BKING, cs.WKING):
-            continue
-        if p in PROM_PIECES:
-            continue
-        hand = piece_to_hand_piece(p)
-        pieces_prev = pieces_org.copy()
-        pieces_prev[dst_sq] = cs.NONE
-        pieces_in_hand_prev = (pieces_in_hand_org[0].copy(), pieces_in_hand_org[1].copy())
-        pieces_in_hand_prev[prev_turn][hand] += 1
-        prev = board.copy()
-        prev.set_pieces(pieces_prev, pieces_in_hand_prev)
-        prev.turn = prev_turn
-        usi = HAND_PIECE_TO_USI[hand] + "*" + sq_to_usi(dst_sq)
-        mv = prev.move_from_usi(usi)
-        try_add_prev_board(result, prev, mv)
-    return result

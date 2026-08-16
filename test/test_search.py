@@ -114,6 +114,80 @@ class BoardStateTests(unittest.TestCase):
         )
 
 
+class RetroFrontierSearchTests(unittest.TestCase):
+    """終端フロンティアの有無で結果が変わらないことを確かめる。"""
+
+    MOVES = ["7g7f", "3c3d", "2g2f", "8c8d"]
+    # 先手の2手・後手の2手はそれぞれ順序を入れ替えられるので解は4つ
+    EXPECTED = sorted([
+        ("7g7f", "3c3d", "2g2f", "8c8d"),
+        ("7g7f", "8c8d", "2g2f", "3c3d"),
+        ("2g2f", "3c3d", "7g7f", "8c8d"),
+        ("2g2f", "8c8d", "7g7f", "3c3d"),
+    ])
+
+    def _run(self, retro_plies, moves=None, limit=10):
+        moves = moves or self.MOVES
+        start = cs.Board()
+        target = start.copy()
+        for usi in moves:
+            target.push_usi(usi)
+        with contextlib.redirect_stdout(io.StringIO()):
+            solutions, stats, _idx, _interrupted = find_all_paths_to_target(
+                start, target, len(moves), limit, set(), 8, 0, 0, [], [],
+                retro_plies=retro_plies,
+            )
+        found = sorted(
+            tuple(cs.move_to_usi(mv) for mv in sol) for sol in solutions
+        )
+        return found, stats
+
+    def test_solutions_match_the_known_answer(self):
+        for retro_plies in (0, 1, 2):
+            with self.subTest(retro_plies=retro_plies):
+                found, stats = self._run(retro_plies)
+                self.assertEqual(self.EXPECTED, found)
+                self.assertEqual(retro_plies, stats["retro_k"])
+
+    def test_odd_depth_uses_one_ply_frontier(self):
+        moves = ["7g7f", "3c3d", "8h2b+"]
+        base, _ = self._run(0, moves)
+        got, stats = self._run(2, moves)
+        self.assertEqual(base, got)
+        self.assertEqual(1, stats["retro_k"])   # max_depth-2 で頭打ち
+        self.assertIn(("7g7f", "3c3d", "8h2b+"), got)
+
+    def test_frontier_cuts_node_count(self):
+        _base, base_stats = self._run(0)
+        _got, retro_stats = self._run(2)
+        self.assertLess(retro_stats["total_nodes"], base_stats["total_nodes"])
+        self.assertGreater(retro_stats["frontier_misses"], 0)
+
+    def test_start_board_is_restored_with_frontier(self):
+        start = cs.Board()
+        before = start.sfen()
+        target = start.copy()
+        for usi in self.MOVES:
+            target.push_usi(usi)
+        with contextlib.redirect_stdout(io.StringIO()):
+            find_all_paths_to_target(
+                start, target, 4, 10, set(), 8, 0, 0, [], [], retro_plies=2
+            )
+        self.assertEqual(before, start.sfen())
+
+    def test_fixed_pieces_are_honoured_inside_the_frontier(self):
+        # 7七の歩を不動駒にすると 7g7f を含む解は出ない
+        start = cs.Board()
+        target = start.copy()
+        for usi in self.MOVES:
+            target.push_usi(usi)
+        with contextlib.redirect_stdout(io.StringIO()):
+            solutions, _stats, _idx, _interrupted = find_all_paths_to_target(
+                start, target, 4, 10, {77}, 8, 0, 0, [], [], retro_plies=2
+            )
+        self.assertEqual([], solutions)
+
+
 class FixedPieceFilterTests(unittest.TestCase):
     def test_square_based_filter_matches_legacy_filter(self):
         from validation import (
