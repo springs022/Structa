@@ -45,6 +45,10 @@ from validation import (
 # ワーカープロセスごとの問題設定
 _W = {}
 
+# 親プロセスが Ctrl+C を処理するために、結果待ちを無期限にしない。
+# ワーカーの探索はこの間も連続して実行される。
+RESULT_WAIT_TIMEOUT_SECONDS = 0.2
+
 
 def decide_process_count(requested: int) -> int:
     """PROCESSES 設定値から実際のプロセス数を決める（0 または負なら自動）。"""
@@ -219,9 +223,18 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
     collected = []
     try:
         show_progress()
-        for index, sols_usi, part_stats in pool.imap_unordered(
-            _worker_task, todo, chunksize=1
-        ):
+        result_iterator = pool.imap_unordered(_worker_task, todo, chunksize=1)
+        while True:
+            try:
+                index, sols_usi, part_stats = result_iterator.next(
+                    RESULT_WAIT_TIMEOUT_SECONDS
+                )
+            except multiprocessing.TimeoutError:
+                # Windows では無期限の結果待ち中に Ctrl+C の処理が遅れる。
+                # 定期的に Python の実行へ戻し、割り込みを受け取れるようにする。
+                continue
+            except StopIteration:
+                break
             done.add(index)
             stats["total_nodes"] += 1   # 初手そのもののノード
             _merge_stats(stats, part_stats, max_depth)
