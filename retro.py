@@ -397,7 +397,6 @@ def build_frontier(target_board: cs.Board, max_depth: int, retro_plies: int,
     if auto:
         if max_depth < AUTO_MIN_DEPTH:
             return None
-        # まず1手だけを軽い予算で作る。これが重ければ逆算は使わない。
         try:
             t0 = time.time()
             table1, sizes1 = build_table(
@@ -409,8 +408,6 @@ def build_frontier(target_board: cs.Board, max_depth: int, retro_plies: int,
             return None
         if elapsed1 > AUTO_FIRST_MAX_SECONDS:
             return None
-
-        # 2手目だけが重いときは、完成済みの1手フロンティアを使う。
         try:
             t0 = time.time()
             table2, sizes2 = build_table(

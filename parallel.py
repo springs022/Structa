@@ -214,6 +214,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
         "pruned_diff_hand_g": 0,
         "pruned_need_moves": 0,
         "pruned_by_depth": [0] * (max_depth + 1),
+        "precise_lb": True,
     }
     done = set(i for (i, _u) in pairs if i < first_move_index)
     interrupted = False

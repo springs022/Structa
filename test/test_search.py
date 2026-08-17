@@ -63,10 +63,19 @@ class SearchRegressionTests(unittest.TestCase):
 
     def test_known_solution_prefixes_are_not_pruned(self):
         start = cs.Board()
-        moves = ["7g7f", "3c3d", "8h3c+", "2a3c", "B*4e", "8b7b", "4e3d+"]
+        # 旧版の手順 ["7g7f","3c3d","8h3c+","2a3c","B*4e","8b7b","4e3d+"] は
+        # 実際には合法手順ではなかった。
+        #   ・B*4e … この時点で先手は角を持っていない
+        #             （8h3c+ は 3c が空きマスなので駒を取っていない）
+        #   ・4e3d+ … 4五も3四も敵陣ではないので成れない
+        # 到達できない局面で下界を検査していたことになるため、
+        # 成りと駒取りを含む合法手順に差し替えた。
+        moves = ["7g7f", "3c3d", "8h3c+", "2a3c", "2g2f", "8b3b", "2f2e"]
         target = start.copy()
         for usi in moves:
-            target.push_usi(usi)
+            mv = target.move_from_usi(usi)
+            self.assertTrue(target.is_legal(mv), f"非合法手です: {usi}")
+            target.push(mv)
 
         board = start.copy()
         for depth, usi in enumerate(moves):
@@ -186,6 +195,21 @@ class RetroFrontierSearchTests(unittest.TestCase):
                 start, target, 4, 10, {77}, 8, 0, 0, [], [], retro_plies=2
             )
         self.assertEqual([], solutions)
+
+
+class PreciseLowerBoundSearchTests(unittest.TestCase):
+    """下界の精密化が常に有効で、解を保つことを確かめる。"""
+
+    _run = RetroFrontierSearchTests._run
+    MOVES = RetroFrontierSearchTests.MOVES
+    EXPECTED = RetroFrontierSearchTests.EXPECTED
+
+    def test_precise_bound_is_always_enabled(self):
+        for retro_plies in (0, 2):
+            with self.subTest(retro_plies=retro_plies):
+                found, stats = self._run(retro_plies)
+                self.assertEqual(self.EXPECTED, found)
+                self.assertTrue(stats["precise_lb"])
 
 
 class FixedPieceFilterTests(unittest.TestCase):

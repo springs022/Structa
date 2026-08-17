@@ -28,6 +28,7 @@ from board_utils import (
     in_prom_zone,
     normalize,
     normalize_piece,
+    piece_to_hand_piece,
     HAND_TO_PIECE
 )
 from movement_rules import (
@@ -40,6 +41,9 @@ from movement_rules import (
 )
 
 INF = 1000
+# 「その駒種は持駒にできないので打てない」ことを表す make_cost。
+# INF より小さくしてあるのは、加算しても INF を超えないようにするため。
+_MAKE_IMPOSSIBLE = 200
 
 SQUARE_NB = 81
 PIECE_NB = 31
@@ -75,6 +79,9 @@ class TargetRequirement:
     # 大駒（馬・龍）かどうかのフラグ。
     candidates: tuple = ()
     is_major: bool = False
+    # 持駒としての駒種（HPAWN〜HROOK）。玉は None。
+    # 「その駒種を打てるか」の判定に使う。
+    hand_kind: object = None
 
 @dataclass(frozen=True)
 class TargetInfo:
@@ -83,6 +90,8 @@ class TargetInfo:
     # 二歩ペナルティの判定が必要かどうか（と金の設置要求があるかどうか）を先後別に持つ。
     # 不要なら protected_sqs の構築自体を省略できる。
     needs_nifu_check: tuple = (False, False)
+    # 目標局面での持駒総数（先手, 後手）。駒を取る手の必要数を数えるのに使う。
+    hand_totals: tuple = (0, 0)
 
 class BoardAnalysis:
     """
@@ -718,9 +727,14 @@ def build_target_info(target_board: cs.Board) -> TargetInfo:
                     target_make_cost(piece, owner, sq, promoted),
                     candidates,
                     piece in _MAJOR_PROM_PIECES,
+                    piece_to_hand_piece(piece),
                 )
             )
-    return TargetInfo(pieces, tuple(requirements), (needs_nifu[0], needs_nifu[1]))
+    target_hands = target_board.pieces_in_hand
+    return TargetInfo(
+        pieces, tuple(requirements), (needs_nifu[0], needs_nifu[1]),
+        (sum(target_hands[0]), sum(target_hands[1])),
+    )
 
 def analyze_board(board: cs.Board, target_info: TargetInfo) -> BoardAnalysis:
     """現在局面を1回走査し、コスト計算で共有する情報を構築する。"""
@@ -771,13 +785,18 @@ def _move_cost_for_requirement(req: TargetRequirement, piece_positions: dict) ->
 def _collect_costs(board_analysis: BoardAnalysis,
                    target_info: TargetInfo,
                    avail_s: int,
-                   avail_g: int):
+                   avail_g: int,
+                   obtainable=None):
     """
     先後別に (piece, sq, make_cost, move_cost) のタプル列と、
     min(make, move) の総和を返す。
 
     途中で総和が avail を超えた時点で打ち切り None を返す（早期脱出）。
     呼び出し側は「need > avail か」しか見ないため、この打ち切りで判定は変わらない。
+
+    obtainable を渡すと「その駒種を持駒にできない側」の make_cost を
+    到達不能扱いにする（自分の持駒にも無く、相手も 1 枚も持っていない駒種は
+    取ることも打つこともできないため）。
     """
     board_pieces = board_analysis.pieces
     piece_positions = board_analysis.piece_positions
@@ -791,6 +810,10 @@ def _collect_costs(board_analysis: BoardAnalysis,
         if board_pieces[sq] == piece:
             continue
         make_cost = req.make_cost
+        if obtainable is not None:
+            kind = req.hand_kind
+            if kind is not None and kind not in obtainable[req.owner]:
+                make_cost = _MAKE_IMPOSSIBLE
         move_cost = _move_cost_for_requirement(req, piece_positions)
         base = make_cost if make_cost < move_cost else move_cost
         if req.owner == cs.BLACK:
@@ -804,6 +827,89 @@ def _collect_costs(board_analysis: BoardAnalysis,
                 return None
             costs_g.append((piece, sq, make_cost, move_cost))
     return costs_s, costs_g, s_cost, g_cost
+
+def obtainable_hand_kinds(piece_positions: dict, hands) -> tuple:
+    """
+    先後それぞれが「これから持駒にしうる駒種」の集合を返す。
+
+    持駒にする方法は「自分がすでに持っている」か「相手の駒を取る」しかない。
+    相手が盤上にも持駒にも 1 枚も持っていない駒種は、
+    どうやっても自分の持駒にできないので、その駒種の目標マスは
+    駒打ちでは実現できない（盤上の駒を動かすしかない）。
+    """
+    owned = (set(), set())
+    for piece in piece_positions:
+        owner = piece_owner(piece)
+        if owner is None:
+            continue
+        kind = piece_to_hand_piece(piece)
+        if kind is not None:
+            owned[owner].add(kind)
+    hand_s, hand_g = hands
+    for kind in range(7):
+        if hand_s[kind] > 0:
+            owned[0].add(kind)
+        if hand_g[kind] > 0:
+            owned[1].add(kind)
+    # 相手が持っている駒種は取れば手に入る。自分の持駒はそのまま打てる。
+    obt_s = {k for k in range(7) if hand_s[k] > 0} | owned[1]
+    obt_g = {k for k in range(7) if hand_g[k] > 0} | owned[0]
+    return obt_s, obt_g
+
+def capture_aware_cost(piece_costs: list,
+                       base_cost: int,
+                       hand_now_total: int,
+                       hand_target_total: int) -> int:
+    """
+    「駒を打つには、その駒をどこかで取ってこなければならない」ことを
+    考慮した必要手数の下界を返す。
+
+    従来の下界は「生駒の設置は打てば 1 手」としていた。
+    しかし持駒が空なら、打つ前にその駒を取る手が要る。
+
+    n 個の目標マスを駒打ちで埋めるとすると、持駒の収支から
+        取る手の数 = （打つ手の数）＋（目標の持駒数）－（現在の持駒数）
+    が成り立つ。打つ手と取る手はどちらもその側の 1 手で、互いに別の手。
+    取る手は盤上の移動手なので、駒の移動手数と取る手数は
+    「同じ手が両方を兼ねうる」ため max で束ねる（足してはいけない）。
+
+        総手数 ≥ n ＋ max( 移動手数の合計 , 必要な取る手数 )
+
+    n をどう選ぶかは最小化する。ある n に対して移動手数を最小にするには、
+    「打ちに切り替えたときの移動手数の減り」が大きい順に n 個選べばよい。
+
+    持駒が潤沢（取る手が不要）なときは従来の下界と完全に一致する。
+    どの n でも従来の値以上になるので、下界が弱くなることはない。
+    """
+    n_req = len(piece_costs)
+    if n_req == 0:
+        return base_cost
+    # 取る手が 1 つも要らないなら従来どおり
+    if hand_now_total >= n_req + hand_target_total:
+        return base_cost
+
+    total_move = 0
+    savings = []
+    for _piece, _sq, make_cost, move_cost in piece_costs:
+        total_move += move_cost
+        # 打ちに切り替えると、移動手数 move_cost が
+        # 「打った後の成りなどの手数（make_cost - 1）」に置き換わる
+        savings.append(move_cost - (make_cost - 1))
+    savings.sort(reverse=True)
+
+    deficit = hand_target_total - hand_now_total
+    journey = total_move
+    need_capture = deficit if deficit > 0 else 0
+    best = journey if journey > need_capture else need_capture
+    for n, saving in enumerate(savings, 1):
+        journey -= saving
+        need_capture = n + deficit
+        if need_capture < 0:
+            need_capture = 0
+        value = n + (journey if journey > need_capture else need_capture)
+        if value < best:
+            best = value
+    return best
 
 def need_moves_count(
     start_board: cs.Board,
@@ -897,24 +1003,45 @@ def corrected_need_moves_count(
     fixed_sqs: set[int],
     target_info: Optional[TargetInfo] = None,
     hands=None,
+    precise: bool = True,
 ) -> Tuple[int, int]:
     """
     先後それぞれが目標局面を実現するのに最低限必要な手数を返す。
 
     fixed_sqs は不動駒の「square index（0〜80）」の集合。
-    ※ 旧版は問題ファイル由来の 2 桁筋段（13、19 など）をそのまま
-      square index として protected_sqs と union していたため、
-      無関係なマスを「取れない駒」と誤認していた。
-      誤認は下界を過大にする方向に働くため、解の取りこぼしを起こしうる。
     hands には board.pieces_in_hand を渡せる（呼び出し側で取得済みなら再取得しない）。
     """
     if target_info is None:
         target_info = build_target_info(target_board)
     board_analysis = analyze_board(start_board, target_info)
-    collected = _collect_costs(board_analysis, target_info, avail_s, avail_g)
+
+    obtainable = None
+    if precise:
+        if hands is None:
+            hands = start_board.pieces_in_hand
+        obtainable = obtainable_hand_kinds(board_analysis.piece_positions, hands)
+
+    collected = _collect_costs(
+        board_analysis, target_info, avail_s, avail_g, obtainable
+    )
     if collected is None:
         return INF, INF
     piece_costs_s, piece_costs_g, s_cost, g_cost = collected
+
+    if precise:
+        # 「打つ前に取ってくる手」を数え込んだ下界に引き上げる。
+        # 従来の値以上にしかならないので、早期脱出の判定はそのままで正しい。
+        hand_target_s, hand_target_g = target_info.hand_totals
+        s_cost = capture_aware_cost(
+            piece_costs_s, s_cost, sum(hands[0]), hand_target_s
+        )
+        if s_cost > avail_s:
+            return INF, INF
+        g_cost = capture_aware_cost(
+            piece_costs_g, g_cost, sum(hands[1]), hand_target_g
+        )
+        if g_cost > avail_g:
+            return INF, INF
 
     untakeable_sqs = None
 
@@ -953,7 +1080,13 @@ def corrected_need_moves_count(
             takeable_cache[side] = result
             return result
 
-        def recount(piece_costs, takeable_pieces, droppable_pieces) -> int:
+        def recount(piece_costs, takeable_pieces, droppable_pieces,
+                    current: int) -> int:
+            """
+            取れない・打てない駒種は make_cost を使えない、という再計算。
+            capture_aware_cost で引き上げた値より小さくなることがあるので、
+            必ず大きい方を採る（どちらも下界なので max で束ねてよい）。
+            """
             total = 0
             for piece, _sq, make_cost, move_cost in piece_costs:
                 np_piece = normalize_piece(piece)
@@ -961,26 +1094,29 @@ def corrected_need_moves_count(
                     total += make_cost if make_cost < move_cost else move_cost
                 else:
                     total += move_cost
-            return total
+            return total if total > current else current
 
         # 後手の再計算（1回目）
         if s_cost == avail_s and g_cost <= avail_g:
             g_cost = recount(
-                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g
+                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g,
+                g_cost
             )
             if g_cost > avail_g:
                 return INF, INF
         # 先手の再計算
         if g_cost == avail_g and s_cost <= avail_s:
             s_cost = recount(
-                piece_costs_s, takeable_piece_types(cs.WHITE), droppable_pieces_s
+                piece_costs_s, takeable_piece_types(cs.WHITE), droppable_pieces_s,
+                s_cost
             )
             if s_cost > avail_s:
                 return INF, INF
         # 後手の再計算（2回目）
         if s_cost == avail_s and g_cost <= avail_g:
             g_cost = recount(
-                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g
+                piece_costs_g, takeable_piece_types(cs.BLACK), droppable_pieces_g,
+                g_cost
             )
 
     # 二歩の考慮（と金の設置要求がある側だけ）

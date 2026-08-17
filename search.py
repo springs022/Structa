@@ -339,7 +339,7 @@ def find_all_paths_to_target(start_board: cs.Board,
             if cached is None:
                 need_s, need_g = corrected_need_moves_count(
                     board, target_board, avail_s, avail_g,
-                    fixed_sqs, target_info, hands
+                    fixed_sqs, target_info, hands, True
                 )
                 cost_put(ck, need_s, need_g)
             else:
@@ -383,6 +383,7 @@ def find_all_paths_to_target(start_board: cs.Board,
         "pruned_diff_hand_g": pruned_diff_hand_g,
         "pruned_need_moves": pruned_need_moves,
         "frontier_misses": frontier_misses,
+        "precise_lb": True,
         "retro_k": retro_k,
         "retro_layer_sizes": list(retro.layer_sizes) if retro is not None else [],
         "pruned_by_depth": pruned_by_depth,

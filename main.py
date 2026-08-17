@@ -270,7 +270,8 @@ if __name__ == "__main__":
             sols, stats, completed_first_moves, interrupted = find_all_paths_to_target_parallel(
                 start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
                 margin, first_move_index, previous_solutions, n_procs,
-                retro_plies, on_frontier_ready=show_parallel_search_ready
+                retro_plies,
+                on_frontier_ready=show_parallel_search_ready
             )
         else:
             out("探索中…", 1, True, False)
@@ -312,6 +313,7 @@ if __name__ == "__main__":
         
         out("---- 枝刈り統計 ----", 2)
         out(f"総ノード数  ：{total:,}", 1)
+        out("下界の精密化：有効（常時）", 2)
         out(
             f"盤上手数計算："
             f"{stats['pruned_need_moves']:,} ({pct(stats['pruned_need_moves'])})",
