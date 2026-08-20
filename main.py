@@ -80,15 +80,8 @@ if __name__ == "__main__":
         st_pos_output_mode = int(cfg.get("ST_POS_OUTPUT_MODE", 1))
         tt_memory_mb = int(cfg.get("TT_MEMORY_MB", 256))
         cfg_processes = int(cfg.get("PROCESSES", 0))
-        retro_raw = cfg.get("RETRO_PLIES", "AUTO").upper()
-        if retro_raw == "AUTO":
-            retro_plies = "AUTO"
-        else:
-            retro_plies = int(retro_raw)
-            if retro_plies < 0:
-                retro_plies = 0
-            if retro_plies > 2:
-                retro_plies = 2
+        # 終端の逆算手数は常に自動選択する。
+        retro_plies = "AUTO"
         cfg_input = cfg.get("INPUT_FILE", "")
         cfg_output = cfg.get("OUTPUT_FILE", "")
         if args.input:
@@ -313,7 +306,6 @@ if __name__ == "__main__":
         
         out("---- 枝刈り統計 ----", 2)
         out(f"総ノード数  ：{total:,}", 1)
-        out("下界の精密化：有効（常時）", 2)
         out(
             f"盤上手数計算："
             f"{stats['pruned_need_moves']:,} ({pct(stats['pruned_need_moves'])})",

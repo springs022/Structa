@@ -54,6 +54,14 @@ _UNPROM_MOVE_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
 _MINOR_P_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
 _MAJOR_P_COST_TABLE = [_COST_UNKNOWN] * MOVE_COST_TABLE_SIZE
 
+# 探索中に piece_to_hand_piece() を繰り返し呼ばないための表。
+# 駒種マスクは HPAWN〜HROOK の7bitで表す。
+_HAND_KIND_BY_PIECE = tuple(piece_to_hand_piece(piece) for piece in range(PIECE_NB))
+_HAND_KIND_BIT_BY_PIECE = tuple(
+    0 if kind is None else 1 << kind for kind in _HAND_KIND_BY_PIECE
+)
+_PIECE_OWNER_BY_PIECE = tuple(piece_owner(piece) for piece in range(PIECE_NB))
+
 def _move_cost_table_index(piece: int, src_sq: int, dst_sq: int) -> int:
     return (piece * SQUARE_NB + src_sq) * SQUARE_NB + dst_sq
 
@@ -727,7 +735,7 @@ def build_target_info(target_board: cs.Board) -> TargetInfo:
                     target_make_cost(piece, owner, sq, promoted),
                     candidates,
                     piece in _MAJOR_PROM_PIECES,
-                    piece_to_hand_piece(piece),
+                    _HAND_KIND_BY_PIECE[piece],
                 )
             )
     target_hands = target_board.pieces_in_hand
@@ -782,11 +790,41 @@ def _move_cost_for_requirement(req: TargetRequirement, piece_positions: dict) ->
                 move_cost = c
     return move_cost
 
+def _missing_requirements_within_budget(board_analysis: BoardAnalysis,
+                                        target_info: TargetInfo,
+                                        avail_s: int,
+                                        avail_g: int):
+    """
+    未達成要求を集める。未達成要求はそれぞれ最低でも1手必要なので、
+    その個数が残り手数を超えた時点で None を返す。
+
+    この判定は obtainable_hand_kinds や move_cost の計算より安いため、
+    精密な下界計算の前に行う。
+    """
+    board_pieces = board_analysis.pieces
+    missing = []
+    count_s = 0
+    count_g = 0
+    for req in target_info.requirements:
+        if board_pieces[req.sq] == req.piece:
+            continue
+        missing.append(req)
+        if req.owner == cs.BLACK:
+            count_s += 1
+            if count_s > avail_s:
+                return None
+        else:
+            count_g += 1
+            if count_g > avail_g:
+                return None
+    return missing
+
 def _collect_costs(board_analysis: BoardAnalysis,
                    target_info: TargetInfo,
                    avail_s: int,
                    avail_g: int,
-                   obtainable=None):
+                   obtainable=None,
+                   missing_requirements=None):
     """
     先後別に (piece, sq, make_cost, move_cost) のタプル列と、
     min(make, move) の総和を返す。
@@ -804,15 +842,20 @@ def _collect_costs(board_analysis: BoardAnalysis,
     costs_g = []
     s_cost = 0
     g_cost = 0
-    for req in target_info.requirements:
+    requirements = (
+        target_info.requirements
+        if missing_requirements is None
+        else missing_requirements
+    )
+    for req in requirements:
         sq = req.sq
         piece = req.piece
-        if board_pieces[sq] == piece:
+        if missing_requirements is None and board_pieces[sq] == piece:
             continue
         make_cost = req.make_cost
         if obtainable is not None:
             kind = req.hand_kind
-            if kind is not None and kind not in obtainable[req.owner]:
+            if kind is not None and not (obtainable[req.owner] & (1 << kind)):
                 make_cost = _MAKE_IMPOSSIBLE
         move_cost = _move_cost_for_requirement(req, piece_positions)
         base = make_cost if make_cost < move_cost else move_cost
@@ -830,30 +873,39 @@ def _collect_costs(board_analysis: BoardAnalysis,
 
 def obtainable_hand_kinds(piece_positions: dict, hands) -> tuple:
     """
-    先後それぞれが「これから持駒にしうる駒種」の集合を返す。
+    先後それぞれが「これから持駒にしうる駒種」の7bitマスクを返す。
 
     持駒にする方法は「自分がすでに持っている」か「相手の駒を取る」しかない。
     相手が盤上にも持駒にも 1 枚も持っていない駒種は、
     どうやっても自分の持駒にできないので、その駒種の目標マスは
     駒打ちでは実現できない（盤上の駒を動かすしかない）。
     """
-    owned = (set(), set())
-    for piece in piece_positions:
-        owner = piece_owner(piece)
-        if owner is None:
-            continue
-        kind = piece_to_hand_piece(piece)
-        if kind is not None:
-            owned[owner].add(kind)
     hand_s, hand_g = hands
+    hand_mask_s = 0
+    hand_mask_g = 0
     for kind in range(7):
+        bit = 1 << kind
         if hand_s[kind] > 0:
-            owned[0].add(kind)
+            hand_mask_s |= bit
         if hand_g[kind] > 0:
-            owned[1].add(kind)
+            hand_mask_g |= bit
+
+    # 盤上駒と持駒を合わせた、現在それぞれの側が所有する駒種。
+    owned_s = hand_mask_s
+    owned_g = hand_mask_g
+    for piece in piece_positions:
+        bit = _HAND_KIND_BIT_BY_PIECE[piece]
+        if bit == 0:
+            continue
+        owner = _PIECE_OWNER_BY_PIECE[piece]
+        if owner == cs.BLACK:
+            owned_s |= bit
+        elif owner == cs.WHITE:
+            owned_g |= bit
+
     # 相手が持っている駒種は取れば手に入る。自分の持駒はそのまま打てる。
-    obt_s = {k for k in range(7) if hand_s[k] > 0} | owned[1]
-    obt_g = {k for k in range(7) if hand_g[k] > 0} | owned[0]
+    obt_s = hand_mask_s | owned_g
+    obt_g = hand_mask_g | owned_s
     return obt_s, obt_g
 
 def capture_aware_cost(piece_costs: list,
@@ -1015,6 +1067,12 @@ def corrected_need_moves_count(
         target_info = build_target_info(target_board)
     board_analysis = analyze_board(start_board, target_info)
 
+    missing_requirements = _missing_requirements_within_budget(
+        board_analysis, target_info, avail_s, avail_g
+    )
+    if missing_requirements is None:
+        return INF, INF
+
     obtainable = None
     if precise:
         if hands is None:
@@ -1022,7 +1080,8 @@ def corrected_need_moves_count(
         obtainable = obtainable_hand_kinds(board_analysis.piece_positions, hands)
 
     collected = _collect_costs(
-        board_analysis, target_info, avail_s, avail_g, obtainable
+        board_analysis, target_info, avail_s, avail_g, obtainable,
+        missing_requirements,
     )
     if collected is None:
         return INF, INF

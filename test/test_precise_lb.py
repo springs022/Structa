@@ -1,13 +1,18 @@
 import unittest
+import random
+from unittest.mock import patch
 
 import cshogi as cs
 
 from cost_calc import (
+    _HAND_KIND_BY_PIECE,
+    INF,
     available_moves_for_side,
     capture_aware_cost,
     corrected_need_moves_count,
     obtainable_hand_kinds,
 )
+from board_utils import piece_owner, piece_to_hand_piece
 
 
 def push_legal(board, usis):
@@ -82,6 +87,27 @@ class CaptureAwareCostTests(unittest.TestCase):
 
 
 class ObtainableKindsTests(unittest.TestCase):
+    @staticmethod
+    def _set_version(piece_positions, hands):
+        """第5段以前の集合版。ビットマスク版との回帰比較に使う。"""
+        owned = (set(), set())
+        for piece in piece_positions:
+            owner = piece_owner(piece)
+            if owner is None:
+                continue
+            kind = piece_to_hand_piece(piece)
+            if kind is not None:
+                owned[owner].add(kind)
+        hand_s, hand_g = hands
+        for kind in range(7):
+            if hand_s[kind] > 0:
+                owned[0].add(kind)
+            if hand_g[kind] > 0:
+                owned[1].add(kind)
+        obt_s = {kind for kind in range(7) if hand_s[kind] > 0} | owned[1]
+        obt_g = {kind for kind in range(7) if hand_g[kind] > 0} | owned[0]
+        return obt_s, obt_g
+
     def test_initial_position_everything_is_obtainable(self):
         board = cs.Board()
         obt_s, obt_g = obtainable_hand_kinds(
@@ -91,8 +117,8 @@ class ObtainableKindsTests(unittest.TestCase):
         # 初形はどの駒種も相手が持っているので、取れば手に入る
         for kind in (cs.HPAWN, cs.HLANCE, cs.HKNIGHT, cs.HSILVER,
                      cs.HGOLD, cs.HBISHOP, cs.HROOK):
-            self.assertIn(kind, obt_s)
-            self.assertIn(kind, obt_g)
+            self.assertTrue(obt_s & (1 << kind))
+            self.assertTrue(obt_g & (1 << kind))
 
     def test_kind_owned_only_by_myself_is_not_obtainable(self):
         # 後手の角が盤上にも持駒にも無い局面。先手は角を打てない
@@ -105,8 +131,58 @@ class ObtainableKindsTests(unittest.TestCase):
             if p:
                 positions.setdefault(p, []).append(sq)
         obt_s, obt_g = obtainable_hand_kinds(positions, board.pieces_in_hand)
-        self.assertNotIn(cs.HBISHOP, obt_s)
-        self.assertIn(cs.HBISHOP, obt_g)
+        self.assertFalse(obt_s & (1 << cs.HBISHOP))
+        self.assertTrue(obt_g & (1 << cs.HBISHOP))
+
+    def test_piece_to_hand_lookup_matches_function(self):
+        self.assertEqual(
+            tuple(piece_to_hand_piece(piece) for piece in range(31)),
+            _HAND_KIND_BY_PIECE,
+        )
+
+    def test_masks_match_previous_set_version_on_reachable_positions(self):
+        rng = random.Random(20260818)
+        board = cs.Board()
+        for _ in range(100):
+            positions = {}
+            for sq, piece in enumerate(board.pieces):
+                if piece != cs.NONE:
+                    positions.setdefault(piece, []).append(sq)
+
+            expected_s, expected_g = self._set_version(
+                positions, board.pieces_in_hand
+            )
+            mask_s, mask_g = obtainable_hand_kinds(
+                positions, board.pieces_in_hand
+            )
+            actual_s = {kind for kind in range(7) if mask_s & (1 << kind)}
+            actual_g = {kind for kind in range(7) if mask_g & (1 << kind)}
+            self.assertEqual(expected_s, actual_s)
+            self.assertEqual(expected_g, actual_g)
+
+            legal_moves = list(board.legal_moves)
+            if not legal_moves:
+                board = cs.Board()
+            else:
+                board.push(rng.choice(legal_moves))
+
+
+class CheapRequirementCountTests(unittest.TestCase):
+    def test_budget_failure_skips_precise_cost_work(self):
+        start = cs.Board()
+        target = cs.Board()
+        target.push_usi("7g7f")
+
+        with patch("cost_calc.obtainable_hand_kinds") as obtainable, patch(
+            "cost_calc._collect_costs"
+        ) as collect:
+            need_s, need_g = corrected_need_moves_count(
+                start, target, 0, 0, set(), precise=True
+            )
+
+        self.assertEqual((INF, INF), (need_s, need_g))
+        obtainable.assert_not_called()
+        collect.assert_not_called()
 
 
 class AdmissibilityTests(unittest.TestCase):
