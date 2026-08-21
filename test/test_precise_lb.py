@@ -11,6 +11,7 @@ from cost_calc import (
     capture_aware_cost,
     corrected_need_moves_count,
     obtainable_hand_kinds,
+    piece_type_balance_cost,
 )
 from board_utils import piece_owner, piece_to_hand_piece
 
@@ -37,6 +38,9 @@ def base_of(piece_costs):
 class CaptureAwareCostTests(unittest.TestCase):
     def test_empty_requirements(self):
         self.assertEqual(0, capture_aware_cost([], 0, 0, 0))
+
+    def test_empty_requirements_still_count_target_hand_deficit(self):
+        self.assertEqual(2, capture_aware_cost([], 0, 0, 2))
 
     def test_all_drops_need_a_capture_each(self):
         # 持駒なし。3マスをすべて打ちで埋めるなら 3 回打って 3 回取る必要がある
@@ -84,6 +88,138 @@ class CaptureAwareCostTests(unittest.TestCase):
                             capture_aware_cost(pc, base, hand_now, hand_target),
                             base,
                         )
+
+
+class PieceTypeBalanceCostTests(unittest.TestCase):
+    @staticmethod
+    def hands(**counts):
+        result = [0] * 7
+        names = {
+            "pawn": cs.HPAWN,
+            "lance": cs.HLANCE,
+            "knight": cs.HKNIGHT,
+            "silver": cs.HSILVER,
+            "gold": cs.HGOLD,
+            "bishop": cs.HBISHOP,
+            "rook": cs.HROOK,
+        }
+        for name, count in counts.items():
+            result[names[name]] = count
+        return result
+
+    @staticmethod
+    def pc(piece, *pairs):
+        return [(piece, i, make, move)
+                for i, (make, move) in enumerate(pairs)]
+
+    def test_other_kind_surplus_cannot_pay_for_bishop_drop(self):
+        # 総枚数版は5枚の歩を角の打ち駒として使えてしまい1手と見る。
+        # 駒種別では角を取る1手＋打つ1手が必要。
+        pc = self.pc(cs.BBISHOP, (1, 100))
+        base = base_of(pc)
+        now = self.hands(pawn=5)
+        target = self.hands()
+        self.assertEqual(1, capture_aware_cost(pc, base, sum(now), sum(target)))
+        self.assertEqual(2, piece_type_balance_cost(pc, base, now, target))
+
+    def test_matching_kind_in_hand_needs_only_the_drop(self):
+        pc = self.pc(cs.BBISHOP, (1, 100))
+        base = base_of(pc)
+        self.assertEqual(
+            1,
+            piece_type_balance_cost(
+                pc, base, self.hands(bishop=1), self.hands()
+            ),
+        )
+
+    def test_target_hand_deficits_are_counted_per_kind(self):
+        # 歩の余剰があっても、目標持駒の角と飛は各1回取る必要がある。
+        self.assertEqual(
+            2,
+            piece_type_balance_cost(
+                [], 0,
+                self.hands(pawn=5),
+                self.hands(bishop=1, rook=1),
+            ),
+        )
+
+    def test_plain_target_hand_deficit_works_on_fast_path(self):
+        self.assertEqual(
+            1,
+            piece_type_balance_cost(
+                [], 0, self.hands(), self.hands(bishop=1)
+            ),
+        )
+
+    def test_capture_can_overlap_a_board_move(self):
+        # 角を1回取る必要があるが、歩の盤上移動1手がその捕獲を兼ねられる。
+        pc = self.pc(cs.BPAWN, (1, 1))
+        self.assertEqual(
+            1,
+            piece_type_balance_cost(
+                pc, base_of(pc),
+                self.hands(lance=1),
+                self.hands(bishop=1),
+            ),
+        )
+
+    def test_never_weaker_than_total_count_bound(self):
+        rng = random.Random(20260820)
+        pieces = [cs.BPAWN, cs.BLANCE, cs.BKNIGHT, cs.BSILVER,
+                  cs.BGOLD, cs.BBISHOP, cs.BROOK]
+        choices = [(1, 1), (1, 3), (1, 100), (2, 2), (3, 6)]
+        for _ in range(500):
+            pc = []
+            for sq in range(rng.randrange(0, 8)):
+                make, move = rng.choice(choices)
+                pc.append((rng.choice(pieces), sq, make, move))
+            now = [rng.randrange(0, 4) for _ in range(7)]
+            target = [rng.randrange(0, 3) for _ in range(7)]
+            base = base_of(pc)
+            old = capture_aware_cost(pc, base, sum(now), sum(target))
+            new = piece_type_balance_cost(pc, base, now, target)
+            self.assertGreaterEqual(new, old)
+
+    def test_dp_matches_exhaustive_drop_choices(self):
+        rng = random.Random(20260821)
+        pieces = [cs.BPAWN, cs.BLANCE, cs.BKNIGHT, cs.BSILVER,
+                  cs.BGOLD, cs.BBISHOP, cs.BROOK]
+        choices = [(1, 1), (1, 3), (1, 100), (2, 2), (3, 6)]
+        for _ in range(200):
+            pc = []
+            for sq in range(rng.randrange(0, 8)):
+                make, move = rng.choice(choices)
+                pc.append((rng.choice(pieces), sq, make, move))
+            now = [rng.randrange(0, 3) for _ in range(7)]
+            target = [rng.randrange(0, 3) for _ in range(7)]
+            base = base_of(pc)
+
+            best = INF
+            for mask in range(1 << len(pc)):
+                drops = 0
+                journey = 0
+                drops_by_kind = [0] * 7
+                for i, (piece, _sq, make, move) in enumerate(pc):
+                    if mask & (1 << i):
+                        drops += 1
+                        drops_by_kind[_HAND_KIND_BY_PIECE[piece]] += 1
+                        journey += make - 1
+                    else:
+                        journey += move
+                captures = sum(
+                    max(0, drops_by_kind[k] + target[k] - now[k])
+                    for k in range(7)
+                )
+                best = min(best, drops + max(journey, captures))
+
+            expected = max(
+                base,
+                capture_aware_cost(pc, base, sum(now), sum(target)),
+                best,
+            )
+            self.assertEqual(
+                expected, piece_type_balance_cost(pc, base, now, target)
+            )
 
 
 class ObtainableKindsTests(unittest.TestCase):

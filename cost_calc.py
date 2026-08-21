@@ -100,6 +100,8 @@ class TargetInfo:
     needs_nifu_check: tuple = (False, False)
     # 目標局面での持駒総数（先手, 後手）。駒を取る手の必要数を数えるのに使う。
     hand_totals: tuple = (0, 0)
+    # 目標局面での駒種別持駒数。駒種別収支下界に使う。
+    hand_counts: tuple = ((), ())
 
 class BoardAnalysis:
     """
@@ -742,6 +744,7 @@ def build_target_info(target_board: cs.Board) -> TargetInfo:
     return TargetInfo(
         pieces, tuple(requirements), (needs_nifu[0], needs_nifu[1]),
         (sum(target_hands[0]), sum(target_hands[1])),
+        (tuple(target_hands[0]), tuple(target_hands[1])),
     )
 
 def analyze_board(board: cs.Board, target_info: TargetInfo) -> BoardAnalysis:
@@ -935,7 +938,8 @@ def capture_aware_cost(piece_costs: list,
     """
     n_req = len(piece_costs)
     if n_req == 0:
-        return base_cost
+        hand_deficit = hand_target_total - hand_now_total
+        return hand_deficit if hand_deficit > base_cost else base_cost
     # 取る手が 1 つも要らないなら従来どおり
     if hand_now_total >= n_req + hand_target_total:
         return base_cost
@@ -962,6 +966,94 @@ def capture_aware_cost(piece_costs: list,
         if value < best:
             best = value
     return best
+
+def piece_type_balance_cost(piece_costs: list,
+                            base_cost: int,
+                            hand_now,
+                            hand_target) -> int:
+    """
+    駒種別の持駒収支を考慮した必要手数の下界を返す。
+
+    capture_aware_cost は持駒の「総枚数」だけを見るため、例えば歩の余剰を
+    角の不足に流用できるという緩和が残る。実際には駒種は捕獲や駒打ちで
+    変わらないので、駒種 k について n_k 枚を打つなら必要な捕獲数は
+
+        max(0, n_k + target_hand[k] - current_hand[k])
+
+    である。これを7駒種について合計する。
+
+    n_k の選択は、盤上駒を動かす場合と、取ってきた／現在持っている駒を
+    打つ場合のどちらが安いかに依存する。各駒種について打つ枚数ごとの
+    (打つ手数, 残る移動手数, 必要捕獲数) を作り、小さなDPで全駒種を
+    合成する。
+
+    打つ手は捕獲を兼ねられない。一方、盤上駒の移動や打った後の成りは
+    捕獲を兼ねうるため、総手数の下界は
+
+        打つ手数 + max(移動手数, 捕獲手数)
+
+    となる。現行下界とは二重計上を避けて max で束ねる。
+    """
+    # まず従来の総枚数版まで引き上げる。これにより、この関数単独でも
+    # 現行下界を完全に包含する。
+    base_cost = capture_aware_cost(
+        piece_costs, base_cost, sum(hand_now), sum(hand_target)
+    )
+
+    # 現在持駒が各駒種とも目標以下なら、駒種別でも総枚数版でも
+    # 必要捕獲数は常に「打つ総数 + 持駒総不足数」となり、値は同じ。
+    # 初形付近の大半の局面をこの安い経路で通す。
+    deltas = [hand_target[k] - hand_now[k] for k in range(7)]
+    kind_hand_deficit = sum(delta for delta in deltas if delta > 0)
+    if kind_hand_deficit > base_cost:
+        base_cost = kind_hand_deficit
+    if all(delta >= 0 for delta in deltas):
+        return base_cost
+
+    total_moves = [0] * 7
+    savings = [[] for _ in range(7)]
+    mandatory_journey = 0
+
+    for piece, _sq, make_cost, move_cost in piece_costs:
+        kind = _HAND_KIND_BY_PIECE[piece]
+        if kind is None:
+            # 玉は持駒にできないので、盤上移動の選択肢しかない。
+            mandatory_journey += move_cost
+            continue
+        total_moves[kind] += move_cost
+        # 打ちに切り替えると、move_cost が「打った後の手数
+        # (make_cost - 1)」に置き換わる。
+        savings[kind].append(move_cost - (make_cost - 1))
+
+    # 状態は (打つ手数, 必要捕獲数) -> 最小の移動手数。
+    # 最大でもおよそ 40x40 状態なので、7駒種の合成でも十分小さい。
+    dp = {(0, 0): mandatory_journey}
+    for kind in range(7):
+        kind_savings = savings[kind]
+        kind_savings.sort(reverse=True)
+        options = []
+        journey = total_moves[kind]
+        deficit = deltas[kind]
+        options.append((0, max(0, deficit), journey))
+        for drops, saving in enumerate(kind_savings, 1):
+            journey -= saving
+            options.append((drops, max(0, drops + deficit), journey))
+
+        next_dp = {}
+        for (drops0, captures0), journey0 in dp.items():
+            for drops1, captures1, journey1 in options:
+                key = (drops0 + drops1, captures0 + captures1)
+                value = journey0 + journey1
+                old = next_dp.get(key)
+                if old is None or value < old:
+                    next_dp[key] = value
+        dp = next_dp
+
+    best = min(
+        drops + max(journey, captures)
+        for (drops, captures), journey in dp.items()
+    )
+    return best if best > base_cost else base_cost
 
 def need_moves_count(
     start_board: cs.Board,
@@ -1090,14 +1182,14 @@ def corrected_need_moves_count(
     if precise:
         # 「打つ前に取ってくる手」を数え込んだ下界に引き上げる。
         # 従来の値以上にしかならないので、早期脱出の判定はそのままで正しい。
-        hand_target_s, hand_target_g = target_info.hand_totals
-        s_cost = capture_aware_cost(
-            piece_costs_s, s_cost, sum(hands[0]), hand_target_s
+        target_hand_counts_s, target_hand_counts_g = target_info.hand_counts
+        s_cost = piece_type_balance_cost(
+            piece_costs_s, s_cost, hands[0], target_hand_counts_s
         )
         if s_cost > avail_s:
             return INF, INF
-        g_cost = capture_aware_cost(
-            piece_costs_g, g_cost, sum(hands[1]), hand_target_g
+        g_cost = piece_type_balance_cost(
+            piece_costs_g, g_cost, hands[1], target_hand_counts_g
         )
         if g_cost > avail_g:
             return INF, INF
