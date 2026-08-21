@@ -18,6 +18,7 @@ from cshogi import KIF
 import random
 import datetime
 from typing import List
+import config
 from io_utils import (
     out
 )
@@ -37,6 +38,7 @@ from cost_calc import (
     build_target_info,
     corrected_need_moves_count
 )
+from fixed_proof import format_auto_fixed_pieces, prove_auto_fixed_sqs, sqs_to_rfs
 from tt import (
     UnreachableTT,
     CostTT,
@@ -91,7 +93,8 @@ def find_all_paths_to_target(start_board: cs.Board,
                              debug_usis: List[str],
                              progress_prefix: str = "",
                              retro_plies: int = 2,
-                             retro=None):
+                             retro=None,
+                             auto_fixed: bool = True):
 
     # 置換表は残り手数を 1 バイトに詰めて持つ
     if max_depth > 126:
@@ -110,8 +113,20 @@ def find_all_paths_to_target(start_board: cs.Board,
     solutions = list(previous_solutions)
     interrupted = False
 
-    # 不動駒。着手フィルタ用に square index 集合を作る。
+    # 手動指定に加え、指定手数内に動かせないことを割当下界で証明する。
     fixed_sqs = rfs_to_sqs(fixed_rfs)
+    auto_fixed_sqs = set()
+    if auto_fixed:
+        auto_fixed_sqs = prove_auto_fixed_sqs(
+            start_board, target_board, max_depth, fixed_sqs
+        )
+        fixed_sqs |= auto_fixed_sqs
+        if auto_fixed_sqs:
+            out(
+                f"自動設定不動駒：{format_auto_fixed_pieces(start_board, auto_fixed_sqs)}",
+                2, console=True,
+                file=config.out_fp is not None,
+            )
     use_fixed = bool(fixed_sqs)
 
     # ---- 終端フロンティア（目標局面から k 手逆算した局面集合）----
@@ -384,6 +399,7 @@ def find_all_paths_to_target(start_board: cs.Board,
         "pruned_need_moves": pruned_need_moves,
         "frontier_misses": frontier_misses,
         "precise_lb": True,
+        "auto_fixed_rfs": sorted(sqs_to_rfs(auto_fixed_sqs)),
         "retro_k": retro_k,
         "retro_layer_sizes": list(retro.layer_sizes) if retro is not None else [],
         "pruned_by_depth": pruned_by_depth,

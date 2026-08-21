@@ -44,7 +44,7 @@ class SearchRegressionTests(unittest.TestCase):
             side_effect=AssertionError("空集合では呼ばない"),
         ), contextlib.redirect_stdout(io.StringIO()):
             solutions, _, _, _ = find_all_paths_to_target(
-                start, target, 1, 1, set(), 1, 0, 0, [], []
+                start, target, 1, 1, set(), 1, 0, 0, [], [], auto_fixed=False
             )
 
         self.assertEqual(1, len(solutions))
@@ -135,7 +135,7 @@ class RetroFrontierSearchTests(unittest.TestCase):
         ("2g2f", "8c8d", "7g7f", "3c3d"),
     ])
 
-    def _run(self, retro_plies, moves=None, limit=10):
+    def _run(self, retro_plies, moves=None, limit=10, auto_fixed=True):
         moves = moves or self.MOVES
         start = cs.Board()
         target = start.copy()
@@ -145,6 +145,7 @@ class RetroFrontierSearchTests(unittest.TestCase):
             solutions, stats, _idx, _interrupted = find_all_paths_to_target(
                 start, target, len(moves), limit, set(), 8, 0, 0, [], [],
                 retro_plies=retro_plies,
+                auto_fixed=auto_fixed,
             )
         found = sorted(
             tuple(cs.move_to_usi(mv) for mv in sol) for sol in solutions
@@ -167,8 +168,9 @@ class RetroFrontierSearchTests(unittest.TestCase):
         self.assertIn(("7g7f", "3c3d", "8h2b+"), got)
 
     def test_frontier_cuts_node_count(self):
-        _base, base_stats = self._run(0)
-        _got, retro_stats = self._run(2)
+        # 終端フロンティア単独の効果を測る。
+        _base, base_stats = self._run(0, auto_fixed=False)
+        _got, retro_stats = self._run(2, auto_fixed=False)
         self.assertLess(retro_stats["total_nodes"], base_stats["total_nodes"])
         self.assertGreater(retro_stats["frontier_misses"], 0)
 

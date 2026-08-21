@@ -80,6 +80,7 @@ if __name__ == "__main__":
         st_pos_output_mode = int(cfg.get("ST_POS_OUTPUT_MODE", 1))
         tt_memory_mb = int(cfg.get("TT_MEMORY_MB", 256))
         cfg_processes = int(cfg.get("PROCESSES", 0))
+        auto_fixed = int(cfg.get("AUTO_FIXED_PIECES", 1)) != 0
         # 終端の逆算手数は常に自動選択する。
         retro_plies = "AUTO"
         cfg_input = cfg.get("INPUT_FILE", "")
@@ -264,14 +265,16 @@ if __name__ == "__main__":
                 start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
                 margin, first_move_index, previous_solutions, n_procs,
                 retro_plies,
-                on_frontier_ready=show_parallel_search_ready
+                on_frontier_ready=show_parallel_search_ready,
+                auto_fixed=auto_fixed,
             )
         else:
             out("探索中…", 1, True, False)
             sols, stats, completed_first_moves, interrupted = find_all_paths_to_target(
                 start, target, max_depth, limit, fixed_rfs, tt_memory_mb,
                 margin, first_move_index, previous_solutions, debug_usis,
-                retro_plies=retro_plies
+                retro_plies=retro_plies,
+                auto_fixed=auto_fixed,
             )
         if interrupted:
             out("", 0, console=True, file=False)

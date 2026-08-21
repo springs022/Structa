@@ -37,6 +37,7 @@ import config
 from io_utils import out
 from retro import RetroFrontier, build_frontier
 from search import find_all_paths_to_target
+from fixed_proof import format_auto_fixed_pieces, prove_auto_fixed_sqs, sqs_to_rfs
 from validation import (
     adjust_target_turn,
     validate_piece_counts,
@@ -134,6 +135,7 @@ def _worker_task(item):
         # 親で決定・構築した終端フロンティアに従う。
         retro_plies=0,
         retro=_W["retro"],
+        auto_fixed=False,
     )
     sols_usi = [
         [mv_usi] + [cs.move_to_usi(m) for m in sol]
@@ -192,7 +194,8 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
                                       previous_solutions: list,
                                       processes: int,
                                       retro_plies: int = 2,
-                                      on_frontier_ready=None):
+                                      on_frontier_ready=None,
+                                      auto_fixed: bool = True):
     """
     直列版 find_all_paths_to_target と同じ戻り値
     (solutions, stats, completed_first_moves, interrupted) を返す。
@@ -201,10 +204,25 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
     adjust_target_turn(start_board, target_board, max_depth)
     validate_piece_counts(start_board, target_board)
 
+    manual_fixed_sqs = rfs_to_sqs(fixed_rfs)
+    auto_fixed_sqs = (
+        prove_auto_fixed_sqs(
+            start_board, target_board, max_depth, manual_fixed_sqs
+        )
+        if auto_fixed else set()
+    )
+    effective_fixed_rfs = set(fixed_rfs) | sqs_to_rfs(auto_fixed_sqs)
+    if auto_fixed_sqs:
+        out(
+            f"自動設定不動駒：{format_auto_fixed_pieces(start_board, auto_fixed_sqs)}",
+            2, console=True,
+            file=config.out_fp is not None,
+        )
+
     start_sfen = start_board.sfen()
     target_sfen = target_board.sfen()
 
-    pairs, total_first_moves = enumerate_first_moves(start_board, fixed_rfs)
+    pairs, total_first_moves = enumerate_first_moves(start_board, effective_fixed_rfs)
     todo = [(i, u) for (i, u) in pairs if i >= first_move_index]
 
     solutions = list(previous_solutions)
@@ -215,6 +233,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
         "pruned_need_moves": 0,
         "pruned_by_depth": [0] * (max_depth + 1),
         "precise_lb": True,
+        "auto_fixed_rfs": sorted(sqs_to_rfs(auto_fixed_sqs)),
     }
     done = set(i for (i, _u) in pairs if i < first_move_index)
     interrupted = False
@@ -250,7 +269,7 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
         processes=processes,
         initializer=_worker_init,
         initargs=(start_sfen, target_sfen, max_depth, limit,
-                  fixed_rfs, per_worker_mb, margin, retro_payload),
+                  effective_fixed_rfs, per_worker_mb, margin, retro_payload),
     )
 
     all_indices = [i for (i, _u) in pairs]
