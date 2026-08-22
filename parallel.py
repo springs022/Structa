@@ -34,7 +34,7 @@ import time
 import cshogi as cs
 
 import config
-from io_utils import out
+from io_utils import format_elapsed_time, out
 from retro import RetroFrontier, build_frontier
 from search import find_all_paths_to_target
 from validation import (
@@ -197,6 +197,8 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
     直列版 find_all_paths_to_target と同じ戻り値
     (solutions, stats, completed_first_moves, interrupted) を返す。
     """
+    progress_started_at = time.monotonic()
+
     # 入力の妥当性は子プロセスを起こす前に親で確認しておく
     adjust_target_turn(start_board, target_board, max_depth)
     validate_piece_counts(start_board, target_board)
@@ -261,8 +263,10 @@ def find_all_paths_to_target_parallel(start_board: cs.Board,
         if total_first_moves > 0:
             n = _completed_prefix(done, all_indices, total_first_moves)
             percent = int(n / total_first_moves * 100)
+            elapsed = format_elapsed_time(time.monotonic() - progress_started_at)
             out(
-                f"\r[{now}] {percent}% 探索済（検出解数：{found_count[0]}）",
+                f"\r[{now}] {percent}% 探索済"
+                f"（経過時間：{elapsed}、検出解数：{found_count[0]}）",
                 1, True, False, True
             )
 

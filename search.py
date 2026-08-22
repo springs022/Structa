@@ -17,8 +17,10 @@ import cshogi as cs
 from cshogi import KIF
 import random
 import datetime
+import time
 from typing import List
 from io_utils import (
+    format_elapsed_time,
     out
 )
 from validation import (
@@ -92,6 +94,8 @@ def find_all_paths_to_target(start_board: cs.Board,
                              progress_prefix: str = "",
                              retro_plies: int = 2,
                              retro=None):
+
+    progress_started_at = time.monotonic()
 
     # 置換表は残り手数を 1 バイトに詰めて持つ
     if max_depth > 126:
@@ -205,9 +209,10 @@ def find_all_paths_to_target(start_board: cs.Board,
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if total_first_moves > 0:
             percent = int(first_move_index / total_first_moves * 100)
+            elapsed = format_elapsed_time(time.monotonic() - progress_started_at)
             out(
                 f"\r[{now}] {progress_prefix}{percent}% 探索済"
-                f"（検出解数：{len(solutions)}）",
+                f"（経過時間：{elapsed}、検出解数：{len(solutions)}）",
                 1, True, False, True
             )
 

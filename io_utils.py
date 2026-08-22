@@ -61,6 +61,13 @@ def out(msg="", level=1, console=False, file=True, overwrite=False):
         if file:
             out_file(msg)
 
+def format_elapsed_time(elapsed_seconds: float) -> str:
+    """経過秒数を「1時間02分03秒」の形式にする。"""
+    total_seconds = max(0, int(elapsed_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}時間{minutes:02d}分{seconds:02d}秒"
+
 def log_system_info():
     """
     システム情報の出力

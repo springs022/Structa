@@ -36,7 +36,8 @@ from io_utils import (
     print_solution_kif,
     get_boards_side_by_side,
     load_debug_sol,
-    save_resume_file
+    save_resume_file,
+    format_elapsed_time,
 )
 from validation import (
     validate_sfen_has_king,
@@ -292,10 +293,7 @@ if __name__ == "__main__":
         elapsed = time.time() - t0
         out("", 0, console=True, file=False)
         out(f"検出解数：{len(sols)}", 0, console=True)
-        hours = int(elapsed // 3600)
-        minutes = int((elapsed % 3600) // 60)
-        seconds = int(elapsed % 60)
-        out(f"処理時間：{hours}時間{minutes}分{seconds}秒", 1, console=True)
+        out(f"処理時間：{format_elapsed_time(elapsed)}", 1, console=True)
         
         total = stats["total_nodes"]
         
